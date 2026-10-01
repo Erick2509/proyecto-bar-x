@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn(){ return request.auth != null; }
+    function me(){ return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function active(){ return signedIn() && me().data.estado == 'Activo'; }
+    function admin(){ return active() && me().data.role == 'admin'; }
+
+    match /users/{uid} {
+      allow read: if active();
+      allow create, update: if admin();
+      allow delete: if false;
+    }
+    match /categories/{id} { allow read: if active(); allow write: if admin(); }
+    match /products/{id} { allow read: if active(); allow create, update: if active(); allow delete: if false; }
+    match /sales/{id} { allow read: if active(); allow create: if active(); allow update: if admin(); allow delete: if false; }
+    match /movements/{id} { allow read: if active(); allow create: if active(); allow update, delete: if false; }
+    match /expenses/{id} { allow read: if admin(); allow create: if active(); allow update, delete: if admin(); }
+    match /cashSessions/{id} { allow read: if active(); allow create: if active(); allow update: if active(); allow delete: if false; }
+    match /audits/{id} { allow read: if admin(); allow create: if active(); allow update, delete: if false; }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

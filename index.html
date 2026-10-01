@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>PROYECTO X — Sistema de Bar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#111827" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <span class="logo-mark">◆</span>
+        <h1>PROYECTO X</h1>
+        <p class="login-tagline">Control de inventario · Ventas · Gastos</p>
+      </div>
+      <form id="login-form" autocomplete="off">
+        <div class="form-group">
+          <label for="login-email">Correo electrónico</label>
+          <input type="email" id="login-email" placeholder="admin@proyectox.com" required />
+        </div>
+        <div class="form-group">
+          <label for="login-password">Contraseña</label>
+          <div class="password-wrapper">
+            <input type="password" id="login-password" placeholder="••••••••" required />
+            <button type="button" class="toggle-password" id="toggle-password" aria-label="Mostrar contraseña">👁</button>
+          </div>
+        </div>
+        <div id="login-error" class="error-msg hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full">Iniciar sesión</button>
+      </form>
+      <div class="login-hint"><p>Accede con el usuario creado en Firebase Authentication.</p></div>
+    </div>
+  </div>
+
+  <!-- APP SHELL -->
+  <div id="app" class="app hidden">
+    <!-- SIDEBAR (desktop) -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <span class="logo-mark">◆</span>
+        <span class="logo-text">PROYECTO X</span>
+      </div>
+      <nav id="nav-menu" class="nav-menu"></nav>
+      <div class="sidebar-footer">
+        <div class="user-info" id="user-info"></div>
+        <button class="btn btn-ghost btn-sm" id="btn-logout">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <!-- MOBILE HEADER -->
+    <header class="mobile-header">
+      <button class="btn-icon" id="btn-menu-toggle" aria-label="Menú">☰</button>
+      <div class="mobile-logo">
+        <span class="logo-mark">◆</span>
+        <span>PROYECTO X</span>
+      </div>
+      <div class="mobile-user" id="mobile-user"></div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main id="main-content" class="main-content">
+      <!-- Content injected by router -->
+    </main>
+
+    <!-- BOTTOM NAV (mobile) -->
+    <nav id="bottom-nav" class="bottom-nav"></nav>
+
+    <!-- FLOATING CART (employee sales) -->
+    <button id="fab-cart" class="fab-cart hidden" aria-label="Ver carrito">
+      <span class="cart-icon">🛒</span>
+      <span class="cart-badge" id="cart-badge">0</span>
+    </button>
+  </div>
+
+  <!-- MODALS & TOASTS -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal" class="modal"></div>
+  </div>
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="store.js"></script>
+  <script src="auth.js"></script>
+  <script src="utils.js"></script>
+  <script src="components.js"></script>
+  <script src="pages.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

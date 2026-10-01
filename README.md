@@ -40,3 +40,10 @@ La creación de empleados usa una segunda instancia de Firebase Auth para no cer
 
 ### IMPORTANTE AL ACTUALIZAR DESDE v3
 Conserva tu `firebase-config.js` que ya funciona en Vercel y reemplaza el resto de archivos por los de v4. Después publica **firestore.rules** en Firebase Console > Firestore Database > Reglas.
+
+
+## v6 móvil
+- Ninguna tabla de datos se oculta en móvil.
+- Dashboard, categorías, inventario, movimientos, gastos y ventas muestran la misma información que escritorio mediante desplazamiento horizontal cuando hace falta.
+- Auditoría fue retirada del menú, rutas y carga de datos.
+- Caché PWA actualizado a v6.

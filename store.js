@@ -8,6 +8,13 @@ const Store = (() => {
   };
   const clean = o => JSON.parse(JSON.stringify(o));
   const docId = () => db.collection('_ids').doc().id;
+  const isActive = u => String(u?.estado || '').toLowerCase() === 'activo';
+  const normalizeUser = u => ({
+    ...u,
+    nombres: String(u?.nombres || u?.nombre || '').trim(),
+    apellidos: String(u?.apellidos || u?.apellido || '').trim(),
+    estado: isActive(u) ? 'Activo' : (u?.estado || 'Inactivo')
+  });
   function getCategory(id){return state.categories.find(x=>x.id===id)}
   function getProduct(id){return state.products.find(x=>x.id===id)}
   function getUser(id){return state.users.find(x=>x.id===id)}
@@ -16,8 +23,8 @@ const Store = (() => {
   function listen(name){ refs[name]?.(); refs[name]=db.collection(name).onSnapshot(s=>{state[name]=s.docs.map(d=>({id:d.id,...d.data()})); if(Auth?.isLoggedIn?.() && Router?.current) Router.go(Router.current);},console.error); }
   async function loadData(){ for(const n of ['users','categories','products','sales','movements','expenses','cashSessions','audits']) listen(n); }
   function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]);}
-  async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const d=await db.collection('users').doc(u.uid).get(); if(!d.exists){await fbAuth.signOut();resolve();return;} state.currentUser={id:u.uid,...d.data()}; await loadData(); resolve(); })); }
-  async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const d=await db.collection('users').doc(c.user.uid).get();if(!d.exists||d.data().estado!=='Activo'){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser={id:c.user.uid,...d.data()};await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
+  async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const d=await db.collection('users').doc(u.uid).get(); if(!d.exists){await fbAuth.signOut();resolve();return;} state.currentUser=normalizeUser({id:u.uid,...d.data()}); if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
+  async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const d=await db.collection('users').doc(c.user.uid).get();if(!d.exists||!isActive(d.data())){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=normalizeUser({id:c.user.uid,...d.data()});await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
   async function logout(){stop();state.cart=[];state.currentUser=null;await fbAuth.signOut()}
   async function audit(accion,detalle){if(!state.currentUser)return;const t=limaParts();await db.collection('audits').add({...t,accion,detalle,usuarioId:state.currentUser.id,usuarioNombre:`${state.currentUser.nombres||''} ${state.currentUser.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()})}
   async function addUser(data){try{const secondary=firebase.initializeApp(firebaseConfig,'userCreator-'+Date.now());const cred=await secondary.auth().createUserWithEmailAndPassword(data.email.trim().toLowerCase(),data.password);const user={email:data.email.trim().toLowerCase(),role:'empleado',nombres:data.nombres.trim(),apellidos:data.apellidos.trim(),dni:data.dni.trim(),telefono:data.telefono.trim(),estado:data.estado||'Activo'};await db.collection('users').doc(cred.user.uid).set(user);await secondary.auth().signOut();await secondary.delete();await audit('CREAR_EMPLEADO',user.email);return{ok:true,user:{id:cred.user.uid,...user}}}catch(e){return{ok:false,error:e.message}}}

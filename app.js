@@ -97,7 +97,7 @@ const App = {
       err.classList.add('hidden');
       this.showApp();
       Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
-      Toast.show(`Bienvenido, ${res.user.nombres}`);
+      Toast.show(`Bienvenido, ${res.user.nombres || res.user.nombre || 'Usuario'}`);
     });
 
     document.getElementById('toggle-password').addEventListener('click', () => {
@@ -173,14 +173,11 @@ const App = {
     // Bottom nav (mobile) - limited items
     const bottomItems = isAdmin
       ? [
-          { page: 'dashboard', icon: '📊', label: 'Home' },
+          { page: 'dashboard', icon: '📊', label: 'Inicio' },
           { page: 'ventas', icon: '🛒', label: 'Ventas' },
-          { page: 'inventario', icon: '📦', label: 'Invent.' },
-          { page: 'gastos', icon: '💸', label: 'Gastos' },
-      { page: 'caja', icon: '💰', label: 'Caja' },
-      { page: 'reportes', icon: '📈', label: 'Reportes' },
-      { page: 'auditoria', icon: '🛡️', label: 'Auditoría' },
-          { page: 'empleados', icon: '👥', label: 'Empl.' }
+          { page: 'inventario', icon: '📦', label: 'Stock' },
+          { page: 'caja', icon: '💰', label: 'Caja' },
+          { page: 'reportes', icon: '📈', label: 'Reportes' }
         ]
       : [
           { page: 'inicio', icon: '🏠', label: 'Inicio' },
@@ -200,17 +197,21 @@ const App = {
   updateUserInfo() {
     const u = Auth.currentUser();
     if (!u) return;
+    // Compatible con perfiles antiguos (nombre/apellido) y nuevos (nombres/apellidos).
+    const nombres = String(u.nombres || u.nombre || u.email || 'Usuario').trim();
+    const apellidos = String(u.apellidos || u.apellido || '').trim();
+    const nombreCompleto = `${nombres} ${apellidos}`.trim();
     const info = document.getElementById('user-info');
     if (info) {
       info.innerHTML = `
-        <div class="name">${Utils.escapeHtml(u.nombres)} ${Utils.escapeHtml(u.apellidos)}</div>
+        <div class="name">${Utils.escapeHtml(nombreCompleto)}</div>
         <div class="role">${u.role === 'admin' ? 'Administrador' : 'Empleado'}</div>
       `;
     }
     const mobile = document.getElementById('mobile-user');
     if (mobile) {
-      mobile.textContent = u.nombres.charAt(0).toUpperCase();
-      mobile.style.cssText = 'width:32px;height:32px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:0.9rem';
+      mobile.textContent = (nombres.charAt(0) || 'U').toUpperCase();
+      mobile.title = nombreCompleto;
     }
   },
 

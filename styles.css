@@ -838,3 +838,53 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== PROYECTO X BRAND ===== */
+.brand-logo{display:block;object-fit:contain;background:#000}
+.brand-logo-login{width:min(100%,360px);height:auto;margin:0 auto 14px;border-radius:12px}
+.brand-logo-sidebar{width:190px;height:64px;object-fit:contain;border-radius:8px}
+.brand-logo-mobile{width:128px;height:44px;object-fit:contain;border-radius:6px}
+@media(max-width:576px){.brand-logo-login{width:min(100%,300px)}.brand-logo-mobile{width:112px;height:40px}}
+
+
+/* ===== RESPONSIVE HARDENING v3 ===== */
+img{max-width:100%}
+.main-content{width:calc(100% - var(--sidebar-w));max-width:none;overflow-x:hidden}
+.mobile-user{width:34px;height:34px;flex:0 0 34px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.9rem}
+.modal-overlay .modal{display:block;position:relative}
+.table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.table-wrap table{min-width:720px}
+.card,.stat-card,.product-card,.cart-panel{min-width:0}
+input,select,textarea{max-width:100%}
+
+@media (max-width:1024px){
+  .main-content{width:100%;padding-left:clamp(.8rem,3vw,1.25rem);padding-right:clamp(.8rem,3vw,1.25rem)}
+  .sidebar{width:min(86vw,300px);box-shadow:var(--shadow)}
+  .bottom-nav{overflow-x:auto;justify-content:space-evenly;gap:.15rem;padding-left:.35rem;padding-right:.35rem}
+  .bottom-nav .nav-item{min-width:58px;flex:1;max-width:92px}
+}
+@media (max-width:640px){
+  html,body{font-size:14px}
+  .login-screen{padding:1rem}
+  .login-card{padding:1.25rem!important}
+  .main-content{padding-top:calc(var(--header-h) + .8rem);padding-bottom:calc(var(--bottom-h) + 1.25rem)}
+  .page-header{align-items:stretch;margin-bottom:1rem}
+  .page-header>.btn,.page-header>button{width:100%}
+  .stat-cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}
+  .stat-card{padding:.9rem}
+  .product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}
+  .product-card{padding:.85rem}
+  .modal-overlay{padding:.5rem;align-items:flex-end}
+  .modal-overlay .modal{max-height:92dvh;border-radius:16px 16px 0 0}
+  .modal-body,.modal-header,.modal-footer{padding:1rem}
+  .modal-footer{position:sticky;bottom:0;background:var(--bg-panel);flex-wrap:wrap}
+  .modal-footer .btn{flex:1}
+  .toast-container{left:.75rem;right:.75rem;top:calc(var(--header-h) + .6rem)}
+  .toast{max-width:none;width:100%}
+  .fab-cart{right:1rem;bottom:calc(var(--bottom-h) + .8rem)}
+}
+@media (max-width:380px){
+  .stat-cards,.product-grid{grid-template-columns:1fr}
+  .bottom-nav .nav-item{font-size:.62rem;min-width:52px}
+  .bottom-nav .nav-icon{font-size:1.1rem}
+}

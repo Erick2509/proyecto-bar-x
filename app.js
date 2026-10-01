@@ -34,6 +34,7 @@ const Router = {
     const renderer = this.routes[page] || this.routes.dashboard;
     const main = document.getElementById('main-content');
     main.innerHTML = renderer();
+    this.makeTablesMobileFriendly(main);
     this.updateNav();
     // Close mobile sidebar
     document.getElementById('sidebar')?.classList.remove('open');
@@ -47,6 +48,25 @@ const Router = {
     }
     App.updateCartBadge();
     window.scrollTo(0, 0);
+  },
+
+  makeTablesMobileFriendly(root = document) {
+    root.querySelectorAll('.table-wrap table, .table-responsive table, table.table').forEach(table => {
+      table.classList.add('responsive-data-table');
+      const headers = Array.from(table.querySelectorAll('thead th')).map((th, i) => {
+        const txt = (th.textContent || '').trim();
+        return txt || (i === 0 ? 'Imagen' : 'Detalle');
+      });
+      table.querySelectorAll('tbody tr').forEach(row => {
+        const cells = Array.from(row.children).filter(el => el.tagName === 'TD');
+        // Empty-state rows keep their normal centered message.
+        if (cells.length === 1 && Number(cells[0].getAttribute('colspan') || 1) > 1) {
+          row.classList.add('mobile-empty-row');
+          return;
+        }
+        cells.forEach((td, i) => td.setAttribute('data-label', headers[i] || `Dato ${i + 1}`));
+      });
+    });
   },
 
   updateNav() {

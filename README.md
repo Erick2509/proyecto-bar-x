@@ -47,3 +47,7 @@ Conserva tu `firebase-config.js` que ya funciona en Vercel y reemplaza el resto 
 - Dashboard, categorías, inventario, movimientos, gastos y ventas muestran la misma información que escritorio mediante desplazamiento horizontal cuando hace falta.
 - Auditoría fue retirada del menú, rutas y carga de datos.
 - Caché PWA actualizado a v6.
+
+
+## v7 móvil
+Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 768 px. No se eliminan campos ni acciones; los encabezados pasan a ser etiquetas dentro de cada tarjeta. Escritorio conserva las tablas.

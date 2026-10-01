@@ -975,3 +975,134 @@ textarea{min-height:88px}
   .table-responsive th, .table-responsive td { padding:.72rem .65rem; font-size:.82rem; }
   .table-wrap .btn, .table-responsive .btn { min-height:38px; }
 }
+
+
+/* ===== MOBILE RECORD CARDS v7 =====
+   Desktop keeps normal tables. On phones every row is reorganized as a full
+   vertical card. No record field or action is removed. */
+@media (max-width: 768px) {
+  .table-wrap,
+  .table-responsive {
+    overflow: visible !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+  }
+
+  .responsive-data-table,
+  .table-wrap .responsive-data-table,
+  .table-responsive .responsive-data-table {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  .responsive-data-table thead {
+    /* Column names are relocated into each card through data-label. */
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0,0,0,0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+  }
+
+  .responsive-data-table tbody {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: .85rem !important;
+    width: 100% !important;
+  }
+
+  .responsive-data-table tbody tr {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: .35rem 1rem !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    background: var(--bg-panel) !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    overflow: hidden !important;
+  }
+
+  .responsive-data-table tbody td {
+    display: grid !important;
+    grid-template-columns: minmax(92px, 38%) minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: .75rem !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    padding: .72rem 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    text-align: right !important;
+  }
+
+  .responsive-data-table tbody td:last-child { border-bottom: 0 !important; }
+
+  .responsive-data-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .045em;
+    text-transform: uppercase;
+    text-align: left;
+  }
+
+  .responsive-data-table tbody td > * { min-width: 0; max-width: 100%; }
+  .responsive-data-table tbody td strong,
+  .responsive-data-table tbody td .badge { justify-self: end; }
+  .responsive-data-table .product-img-placeholder { margin-left: auto; }
+
+  .responsive-data-table td.table-actions,
+  .responsive-data-table tbody td[data-label="Acciones"] {
+    grid-template-columns: 1fr !important;
+    text-align: left !important;
+    gap: .55rem !important;
+    padding-top: .8rem !important;
+  }
+  .responsive-data-table td.table-actions::before,
+  .responsive-data-table tbody td[data-label="Acciones"]::before {
+    margin-bottom: .1rem;
+  }
+  .responsive-data-table td.table-actions .btn,
+  .responsive-data-table tbody td[data-label="Acciones"] .btn {
+    width: 100% !important;
+    margin: 0 !important;
+  }
+
+  .responsive-data-table tr.mobile-empty-row {
+    display: block !important;
+    padding: 0 !important;
+  }
+  .responsive-data-table tr.mobile-empty-row td {
+    display: block !important;
+    text-align: center !important;
+    border: 0 !important;
+    padding: 1rem !important;
+  }
+  .responsive-data-table tr.mobile-empty-row td::before { display: none !important; }
+
+  /* Keep long dashboard/history content inside the phone width. */
+  .dash-grid, .dash-grid > *, .card, .main-content { min-width: 0 !important; max-width: 100% !important; }
+}
+
+@media (max-width: 420px) {
+  .responsive-data-table tbody tr { padding: .3rem .8rem !important; border-radius: 12px !important; }
+  .responsive-data-table tbody td { grid-template-columns: minmax(82px, 36%) minmax(0,1fr) !important; gap: .55rem !important; }
+  .responsive-data-table tbody td::before { font-size: .68rem; }
+}

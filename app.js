@@ -15,6 +15,7 @@ const Router = {
     caja: () => Pages.caja(),
     reportes: () => Pages.reportes(),
     auditoria: () => Pages.auditoria(),
+    configuracion: () => Pages.configuracion(),
     productosDisponibles: () => Pages.productosDisponibles(),
     inicio: () => Pages.dashboardEmployee()
   },
@@ -25,7 +26,7 @@ const Router = {
       return;
     }
     // Guard routes
-    const adminOnly = ['inventario', 'movimientos', 'categorias', 'productos', 'empleados', 'gastos', 'reportes', 'auditoria'];
+    const adminOnly = ['inventario', 'movimientos', 'categorias', 'productos', 'empleados', 'gastos', 'reportes', 'auditoria', 'configuracion'];
     if (adminOnly.includes(page) && !Auth.isAdmin()) {
       Toast.show('Acceso denegado', 'error');
       page = 'dashboard';
@@ -138,25 +139,44 @@ const App = {
     });
   },
 
+  openMobileMenu() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.add('open');
+    let backdrop = document.getElementById('sidebar-backdrop');
+    if (!backdrop) {
+      backdrop = document.createElement('div');
+      backdrop.id = 'sidebar-backdrop';
+      backdrop.className = 'sidebar-backdrop';
+      backdrop.addEventListener('click', () => {
+        sidebar.classList.remove('open');
+        backdrop.classList.remove('show');
+      });
+      document.body.appendChild(backdrop);
+    }
+    backdrop.classList.add('show');
+  },
+
   buildNav() {
     const isAdmin = Auth.isAdmin();
     const menu = isAdmin ? [
       { page: 'dashboard', icon: '📊', label: 'Dashboard' },
-      { page: 'ventas', icon: '🛒', label: 'Ventas' },
-      { page: 'historial', icon: '🧾', label: 'Historial de ventas' },
+      { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
+      { page: 'caja', icon: '💰', label: 'Caja' },
+      { page: 'productos', icon: '🏷️', label: 'Productos' },
+      { page: 'categorias', icon: '📂', label: 'Categorías' },
       { page: 'inventario', icon: '📦', label: 'Inventario' },
       { page: 'movimientos', icon: '🔄', label: 'Movimientos' },
-      { page: 'categorias', icon: '📂', label: 'Categorías' },
-      { page: 'productos', icon: '🏷️', label: 'Productos' },
-      { page: 'empleados', icon: '👥', label: 'Empleados' },
       { page: 'gastos', icon: '💸', label: 'Gastos' },
-      { page: 'caja', icon: '💰', label: 'Caja' },
+      { page: 'historial', icon: '🧾', label: 'Ventas' },
+      { page: 'empleados', icon: '👥', label: 'Empleados' },
       { page: 'reportes', icon: '📈', label: 'Reportes' },
-      { page: 'auditoria', icon: '🛡️', label: 'Auditoría' }
+      { page: 'auditoria', icon: '🛡️', label: 'Auditoría' },
+      { page: 'configuracion', icon: '⚙️', label: 'Configuración' }
     ] : [
       { page: 'inicio', icon: '🏠', label: 'Inicio' },
-      { page: 'ventas', icon: '🛒', label: 'Ventas' },
-      { page: 'historial', icon: '🧾', label: 'Historial de ventas' },
+      { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
+      { page: 'historial', icon: '🧾', label: 'Mis ventas' },
       { page: 'productosDisponibles', icon: '📦', label: 'Productos disponibles' },
       { page: 'caja', icon: '💰', label: 'Mi caja' }
     ];
@@ -170,28 +190,31 @@ const App = {
 
     document.getElementById('nav-menu').innerHTML = navHtml;
 
-    // Bottom nav (mobile) - limited items
+    // Navegación inferior móvil: accesos rápidos + botón para abrir el menú completo.
     const bottomItems = isAdmin
       ? [
           { page: 'dashboard', icon: '📊', label: 'Inicio' },
-          { page: 'ventas', icon: '🛒', label: 'Ventas' },
-          { page: 'inventario', icon: '📦', label: 'Stock' },
+          { page: 'ventas', icon: '🛒', label: 'Vender' },
           { page: 'caja', icon: '💰', label: 'Caja' },
-          { page: 'reportes', icon: '📈', label: 'Reportes' }
+          { page: 'productos', icon: '🏷️', label: 'Productos' }
         ]
       : [
           { page: 'inicio', icon: '🏠', label: 'Inicio' },
-          { page: 'ventas', icon: '🛒', label: 'Ventas' },
-          { page: 'historial', icon: '🧾', label: 'Historial' },
-          { page: 'productosDisponibles', icon: '📦', label: 'Productos' }
+          { page: 'ventas', icon: '🛒', label: 'Vender' },
+          { page: 'historial', icon: '🧾', label: 'Ventas' },
+          { page: 'caja', icon: '💰', label: 'Caja' }
         ];
 
+    const openMobileMenu = `
+      <button class="nav-item mobile-more" type="button" onclick="App.openMobileMenu()">
+        <span class="nav-icon">☰</span><span>Más</span>
+      </button>`;
     document.getElementById('bottom-nav').innerHTML = bottomItems.map(m => `
       <button class="nav-item" data-page="${m.page}" onclick="Router.go('${m.page}')">
         <span class="nav-icon">${m.icon}</span>
         <span>${m.label}</span>
       </button>
-    `).join('');
+    `).join('') + openMobileMenu;
   },
 
   updateUserInfo() {

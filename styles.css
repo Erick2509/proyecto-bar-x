@@ -911,3 +911,21 @@ textarea{min-height:88px}
   .product-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .pc-name{overflow-wrap:anywhere}
 }
+
+
+/* ===== MOBILE ADMIN NAV v5 ===== */
+@media (max-width:1024px){
+  .sidebar{position:fixed!important;left:0;top:0;bottom:0;height:100dvh;z-index:110!important;display:flex!important;flex-direction:column;overflow:hidden;background:var(--bg-panel)}
+  .sidebar-header{flex:0 0 auto}
+  .nav-menu{display:flex!important;flex:1 1 auto;min-height:0;overflow-y:auto!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:1rem}
+  .nav-menu .nav-item{display:flex!important;width:100%;min-height:46px;flex:0 0 auto}
+  .sidebar-footer{flex:0 0 auto;padding-bottom:max(1rem,env(safe-area-inset-bottom))}
+  .sidebar-backdrop{z-index:105!important}
+  .bottom-nav{z-index:90;padding-bottom:max(.35rem,env(safe-area-inset-bottom))}
+  .bottom-nav .nav-item{min-width:0!important;max-width:none!important}
+}
+@media (max-width:480px){
+  .sidebar{width:min(90vw,320px)!important}
+  .bottom-nav .nav-item{font-size:.6rem;padding:.35rem .15rem}
+  .bottom-nav .nav-icon{font-size:1.05rem}
+}

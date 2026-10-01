@@ -1204,5 +1204,23 @@ const Pages = {
   reportes(){if(!Auth.requireAdmin())return '';const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),gastos=Store.totalExpenses(),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+s.total);return `<div class="page-header"><h1 class="page-title">📈 Reportes</h1></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
   auditoria(){if(!Auth.requireAdmin())return '';const a=[...Store.state.audits].sort((x,y)=>(`${y.fecha}${y.hora}`).localeCompare(`${x.fecha}${x.hora}`));return `<div class="page-header"><h1 class="page-title">🛡️ Auditoría</h1></div><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>${a.map(x=>`<tr><td>${x.fecha} ${x.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(x.usuarioNombre||'')}</td><td>${Utils.escapeHtml(x.accion||'')}</td><td>${Utils.escapeHtml(x.detalle||'')}</td></tr>`).join('')||'<tr><td colspan="4">Sin eventos</td></tr>'}</tbody></table></div>`},
   async anularVenta(id){const motivo=prompt('Motivo de anulación:');if(!motivo)return;const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok)Router.go('historial')}
-
+,
+  configuracion() {
+    if (!Auth.requireAdmin()) return '';
+    const u = Auth.currentUser() || {};
+    return `<div class="page-header"><h1 class="page-title">⚙️ Configuración</h1></div>
+      <div class="row g-3">
+        <div class="col-12 col-lg-6"><div class="card p-3">
+          <h5>Proyecto X Bar</h5><p class="text-muted mb-3">Información general del sistema.</p>
+          <div class="mb-2"><strong>Administrador:</strong> ${Utils.escapeHtml(u.nombre || u.nombres || 'Administrador')}</div>
+          <div class="mb-2"><strong>Correo:</strong> ${Utils.escapeHtml(u.email || '')}</div>
+          <div class="mb-2"><strong>Rol:</strong> ${Utils.escapeHtml(u.role || 'admin')}</div>
+          <div><strong>Base de datos:</strong> Firebase / Firestore</div>
+        </div></div>
+        <div class="col-12 col-lg-6"><div class="card p-3">
+          <h5>Aplicación</h5><p>La configuración sensible de Firebase permanece en <code>firebase-config.js</code>.</p>
+          <p class="mb-0">Los cambios administrativos del negocio se realizan desde Productos, Categorías, Empleados, Caja e Inventario.</p>
+        </div></div>
+      </div>`;
+  }
 };

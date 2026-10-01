@@ -30,3 +30,13 @@
 
 ## Nota de seguridad
 La creación de empleados usa una segunda instancia de Firebase Auth para no cerrar la sesión del administrador. Las eliminaciones son lógicas (Inactivo) para preservar historial.
+
+## Versión v4 - producción
+- Corregida normalización de perfiles `nombre/nombres`, `apellido/apellidos`, `activo/Activo`.
+- Carga de colecciones según rol para evitar errores de permisos en empleados.
+- Reglas Firestore endurecidas: catálogo solo Admin; empleados solo pueden descontar stock durante ventas; caja ligada al usuario.
+- Mensajes visibles para errores de Firestore y promesas no controladas.
+- Responsive/táctil reforzado para Android, iPhone, tablet y escritorio.
+
+### IMPORTANTE AL ACTUALIZAR DESDE v3
+Conserva tu `firebase-config.js` que ya funciona en Vercel y reemplaza el resto de archivos por los de v4. Después publica **firestore.rules** en Firebase Console > Firestore Database > Reglas.

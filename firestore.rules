@@ -1,23 +1,64 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn(){ return request.auth != null; }
-    function me(){ return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
-    function active(){ return signedIn() && me().data.estado.lower() == 'activo'; }
-    function admin(){ return active() && me().data.role == 'admin'; }
+    function signedIn() { return request.auth != null; }
+    function myPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && exists(myPath()); }
+    function me() { return get(myPath()); }
+    function active() {
+      return hasProfile() && (me().data.estado == 'activo' || me().data.estado == 'Activo');
+    }
+    function admin() { return active() && me().data.role == 'admin'; }
+    function owner(field) { return active() && resource.data[field] == request.auth.uid; }
 
     match /users/{uid} {
       allow read: if active();
       allow create, update: if admin();
       allow delete: if false;
     }
-    match /categories/{id} { allow read: if active(); allow write: if admin(); }
-    match /products/{id} { allow read: if active(); allow create, update: if active(); allow delete: if false; }
-    match /sales/{id} { allow read: if active(); allow create: if active(); allow update: if admin(); allow delete: if false; }
-    match /movements/{id} { allow read: if active(); allow create: if active(); allow update, delete: if false; }
-    match /expenses/{id} { allow read: if admin(); allow create: if active(); allow update, delete: if admin(); }
-    match /cashSessions/{id} { allow read: if active(); allow create: if active(); allow update: if active(); allow delete: if false; }
-    match /audits/{id} { allow read: if admin(); allow create: if active(); allow update, delete: if false; }
+    match /categories/{id} {
+      allow read: if active();
+      allow create, update: if admin();
+      allow delete: if false;
+    }
+    match /products/{id} {
+      allow read: if active();
+      // El admin administra catálogo. Empleados solo pueden cambiar stock durante una venta.
+      allow create: if admin();
+      allow update: if admin() || (active()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
+        && request.resource.data.stock >= 0);
+      allow delete: if false;
+    }
+    match /sales/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.empleadoId == request.auth.uid;
+      allow update: if admin();
+      allow delete: if false;
+    }
+    match /movements/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.usuarioId == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /expenses/{id} {
+      allow read: if admin();
+      allow create: if active() && request.resource.data.usuarioId == request.auth.uid;
+      allow update, delete: if admin();
+    }
+    match /cashSessions/{id} {
+      allow read: if admin() || (active() && resource.data.usuarioId == request.auth.uid);
+      allow create: if active() && request.resource.data.usuarioId == request.auth.uid;
+      allow update: if admin() || (active()
+        && resource.data.usuarioId == request.auth.uid
+        && request.resource.data.usuarioId == request.auth.uid);
+      allow delete: if false;
+    }
+    match /audits/{id} {
+      allow read: if admin();
+      allow create: if active() && request.resource.data.usuarioId == request.auth.uid;
+      allow update, delete: if false;
+    }
     match /{document=**} { allow read, write: if false; }
   }
 }

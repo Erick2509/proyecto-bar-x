@@ -224,6 +224,16 @@ const App = {
   }
 };
 
+// Errores no controlados: mostrarlos de forma legible en vez de dejar la app silenciosa.
+window.addEventListener('unhandledrejection', (e) => {
+  console.error(e.reason);
+  const msg = e.reason?.message || 'Ocurrió un error inesperado';
+  try { Toast.show(msg, 'error'); } catch (_) {}
+});
+window.addEventListener('error', (e) => {
+  console.error(e.error || e.message);
+});
+
 // Boot
 document.addEventListener('DOMContentLoaded', () => App.init());
 

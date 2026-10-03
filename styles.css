@@ -22,8 +22,8 @@
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 4px 24px rgba(0,0,0,0.45);
-  --font-serif: 'Playfair Display', Georgia, serif;
-  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-serif: 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
   --sidebar-w: 260px;
   --header-h: 56px;
   --bottom-h: 64px;
@@ -1106,3 +1106,10 @@ textarea{min-height:88px}
   .responsive-data-table tbody td { grid-template-columns: minmax(82px, 36%) minmax(0,1fr) !important; gap: .55rem !important; }
   .responsive-data-table tbody td::before { font-size: .68rem; }
 }
+
+/* v9: legibilidad y énfasis del dashboard */
+.page-title { font-weight: 800; letter-spacing: -0.02em; }
+.stat-card .stat-label { color: var(--text-primary); font-weight: 700; font-size: .82rem; }
+.stat-card .stat-value { font-weight: 800; }
+.stat-card .stat-sub { color: var(--text-secondary); font-weight: 600; }
+.dash-grid h3 { font-weight: 800; color: var(--text-primary); }

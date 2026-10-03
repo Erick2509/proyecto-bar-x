@@ -68,7 +68,7 @@ service cloud.firestore {
         && request.resource.data.usuarioId == request.auth.uid
         && resource.data.estado == 'Abierta'
         && request.resource.data.estado == 'Cerrada'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','efectivoVentas','esperado','real','diferencia']));
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia']));
       allow delete: if false;
     }
     match /audits/{id} {

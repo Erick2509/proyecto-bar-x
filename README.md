@@ -19,7 +19,7 @@
 ## Incluye
 - Firebase Authentication y Firestore en lugar de localStorage.
 - Roles Admin/Empleado.
-- Productos, categorías, inventario y stock mínimo.
+- Productos, categorías, stock y stock mínimo.
 - Entradas, salidas, mermas y ajustes +/-.
 - Ventas con snapshot del producto/costo y stock transaccional.
 - Efectivo, Yape, Plin y tarjeta.
@@ -44,7 +44,7 @@ Conserva tu `firebase-config.js` que ya funciona en Vercel y reemplaza el resto 
 
 ## v6 móvil
 - Ninguna tabla de datos se oculta en móvil.
-- Dashboard, categorías, inventario, movimientos, gastos y ventas muestran la misma información que escritorio mediante desplazamiento horizontal cuando hace falta.
+- Dashboard, categorías, productos, movimientos, gastos y ventas muestran la misma información que escritorio mediante desplazamiento horizontal cuando hace falta.
 - Auditoría fue retirada del menú, rutas y carga de datos.
 - Caché PWA actualizado a v6.
 

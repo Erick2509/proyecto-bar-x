@@ -6,7 +6,6 @@ const Router = {
     dashboard: () => Auth.isAdmin() ? Pages.dashboardAdmin() : Pages.dashboardEmployee(),
     ventas: () => Pages.ventas(),
     historial: () => Pages.historial(),
-    inventario: () => Pages.inventario(),
     movimientos: () => Pages.movimientos(),
     categorias: () => Pages.categorias(),
     productos: () => Pages.productos(),
@@ -25,7 +24,7 @@ const Router = {
       return;
     }
     // Guard routes
-    const adminOnly = ['inventario', 'movimientos', 'categorias', 'productos', 'empleados', 'gastos', 'reportes', 'configuracion'];
+    const adminOnly = ['movimientos', 'categorias', 'productos', 'empleados', 'gastos', 'reportes', 'configuracion'];
     if (adminOnly.includes(page) && !Auth.isAdmin()) {
       Toast.show('Acceso denegado', 'error');
       page = 'dashboard';
@@ -184,7 +183,6 @@ const App = {
       { page: 'caja', icon: '💰', label: 'Caja' },
       { page: 'productos', icon: '🏷️', label: 'Productos' },
       { page: 'categorias', icon: '📂', label: 'Categorías' },
-      { page: 'inventario', icon: '📦', label: 'Inventario' },
       { page: 'movimientos', icon: '🔄', label: 'Movimientos' },
       { page: 'gastos', icon: '💸', label: 'Gastos' },
       { page: 'historial', icon: '🧾', label: 'Ventas' },

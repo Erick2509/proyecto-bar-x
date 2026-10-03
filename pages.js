@@ -63,8 +63,8 @@ const Pages = {
         </div>
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <h3 style="font-size:1.1rem">Alertas de inventario</h3>
-            <button class="btn btn-sm btn-secondary" onclick="Router.go('inventario')">Ver inventario</button>
+            <h3 style="font-size:1.1rem">Alertas de stock</h3>
+            <button class="btn btn-sm btn-secondary" onclick="Router.go('productos')">Ver productos</button>
           </div>
           ${low.length === 0 ? Components.empty('✅', 'Todo el stock está en niveles normales') : `
             <div class="alert-list">
@@ -435,6 +435,7 @@ const Pages = {
           </thead>
           <tbody id="prod-tbody">
             ${products.map(p => Components.productRow(p, `
+              <button class="btn btn-sm btn-primary" onclick="Pages.openAddStockForm('${p.id}')">+ Stock</button>
               <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
               <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
             `)).join('') || `<tr><td colspan="8">${Components.empty('📦', 'No hay productos registrados')}</td></tr>`}
@@ -443,7 +444,8 @@ const Pages = {
       </div>
       <div class="mobile-cards" id="prod-cards">
         ${products.map(p => Components.mobileProductCard(p, `
-          <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
+          <button class="btn btn-sm btn-primary" onclick="Pages.openAddStockForm('${p.id}')">+ Stock</button>
+              <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
           <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
         `)).join('') || Components.empty('📦', 'No hay productos registrados')}
       </div>
@@ -466,13 +468,15 @@ const Pages = {
     const cards = document.getElementById('prod-cards');
     if (tbody) {
       tbody.innerHTML = filtered.map(p => Components.productRow(p, `
-        <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
+        <button class="btn btn-sm btn-primary" onclick="Pages.openAddStockForm('${p.id}')">+ Stock</button>
+              <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
         <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
       `)).join('') || `<tr><td colspan="8">${Components.empty('📦', 'Sin resultados')}</td></tr>`;
     }
     if (cards) {
       cards.innerHTML = filtered.map(p => Components.mobileProductCard(p, `
-        <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
+        <button class="btn btn-sm btn-primary" onclick="Pages.openAddStockForm('${p.id}')">+ Stock</button>
+              <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
         <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
       `)).join('') || Components.empty('📦', 'Sin resultados');
     }
@@ -526,7 +530,7 @@ const Pages = {
             <label>4. Stock mínimo *</label>
             <input type="number" name="stockMinimo" min="0" required value="${p.stockMinimo}" />
           </div>
-          <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:1rem">El stock actual (${p.stock}) solo se modifica desde Inventario / Movimientos.</p>
+          <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:1rem">Stock actual: <strong>${p.stock}</strong>. Para agregar unidades usa el botón <strong>+ Stock</strong> en Productos; la compra generará automáticamente su gasto.</p>
           `}
           <div class="form-group">
             <label>5. Descripción (opcional)</label>
@@ -581,6 +585,42 @@ const Pages = {
     Toast.show(id ? 'Producto actualizado' : 'Producto creado (movimiento y gasto generados si había stock)');
     Router.go('productos');
   },
+  openAddStockForm(productoId) {
+    const p = Store.getProduct(productoId);
+    if (!p) return;
+    Modal.open(`
+      <div class="modal-header">
+        <h2>Agregar stock</h2>
+        <button class="btn-icon" onclick="Modal.close()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom:1rem"><strong>${Utils.escapeHtml(p.nombre)}</strong> · Stock actual: <strong>${p.stock}</strong></p>
+        <div class="form-group"><label>Cantidad a agregar *</label><input type="number" id="stock-add-qty" min="1" step="1" value="1" oninput="Pages.updateAddStockPreview()" /></div>
+        <div class="form-group"><label>Costo unitario (S/) *</label><input type="number" id="stock-add-cost" min="0" step="0.01" value="${Number(p.precioCompra || 0).toFixed(2)}" oninput="Pages.updateAddStockPreview()" /></div>
+        <div class="form-group"><label>Proveedor / observación (opcional)</label><input type="text" id="stock-add-note" placeholder="Ej. compra a proveedor" /></div>
+        <div class="card p-3"><small>Gasto que se registrará automáticamente</small><strong id="stock-add-preview" style="font-size:1.2rem;color:var(--amber)">${Utils.formatMoney(Number(p.precioCompra || 0))}</strong></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button>
+        <button class="btn btn-primary" onclick="Pages.saveAddStock('${productoId}')">Agregar stock y registrar gasto</button>
+      </div>`);
+  },
+  updateAddStockPreview() {
+    const qty = Number(document.getElementById('stock-add-qty')?.value) || 0;
+    const cost = Number(document.getElementById('stock-add-cost')?.value) || 0;
+    const el = document.getElementById('stock-add-preview');
+    if (el) el.textContent = Utils.formatMoney(qty * cost);
+  },
+  async saveAddStock(productoId) {
+    const cantidad = Number(document.getElementById('stock-add-qty')?.value);
+    const costo = Number(document.getElementById('stock-add-cost')?.value);
+    const motivo = (document.getElementById('stock-add-note')?.value || '').trim() || 'Compra de stock';
+    if (!Number.isInteger(cantidad) || cantidad <= 0) return Toast.show('Ingresa una cantidad válida', 'error');
+    if (!Number.isFinite(costo) || costo <= 0) return Toast.show('El costo unitario debe ser mayor que 0 para registrar el gasto', 'error');
+    const res = await Store.addMovement({ productoId, tipo:'Entrada', cantidad, costoUnitario:costo, motivo });
+    if (!res.ok) return Toast.show(res.error || 'No se pudo agregar stock', 'error');
+    Modal.close(); Toast.show('Stock agregado y gasto registrado', 'success'); Router.go('productos');
+  },
   deleteProducto(id) {
     confirmAction('¿Desactivar este producto?', async () => {
       await Store.deleteProduct(id);
@@ -589,49 +629,7 @@ const Pages = {
     });
   },
 
-  // ---------- INVENTARIO ----------
-  inventario() {
-    if (!Auth.requireAdmin()) return '';
-    const products = Store.state.products.filter(p => p.estado === 'Activo');
-    return `
-      <div class="page-header">
-        <h1 class="page-title">Inventario</h1>
-      </div>
-      <div class="toolbar">
-        <input type="search" class="search-input" id="inv-search" placeholder="Buscar producto..." oninput="Pages.filterInventario()" />
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th></th><th>Producto</th><th>Categoría</th><th>Stock</th><th>Mínimo</th><th>Estado</th><th>Acciones</th></tr>
-          </thead>
-          <tbody id="inv-tbody">
-            ${products.map(p => {
-              const cat = Store.getCategory(p.categoriaId);
-              return `<tr data-name="${p.nombre.toLowerCase()}">
-                <td><span class="product-img-placeholder">${p.imagen || '📦'}</span></td>
-                <td><strong>${Utils.escapeHtml(p.nombre)}</strong></td>
-                <td>${Utils.escapeHtml(cat?.nombre || '—')}</td>
-                <td><strong>${p.stock}</strong></td>
-                <td>${p.stockMinimo}</td>
-                <td>${Components.stockStatusBadge(p)}</td>
-                <td>
-                  <button class="btn btn-sm btn-primary" onclick="Pages.openMovimientoForm('${p.id}')">Registrar movimiento</button>
-                </td>
-              </tr>`;
-            }).join('') || `<tr><td colspan="7">${Components.empty('📦', 'No hay productos')}</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    `;
-  },
-  filterInventario() {
-    const q = (document.getElementById('inv-search')?.value || '').toLowerCase();
-    document.querySelectorAll('#inv-tbody tr').forEach(tr => {
-      const name = tr.getAttribute('data-name') || '';
-      tr.style.display = name.includes(q) ? '' : 'none';
-    });
-  },
+  // ---------- MOVIMIENTOS DE STOCK ----------
   openMovimientoForm(productoId) {
     const p = Store.getProduct(productoId);
     if (!p) return;
@@ -706,7 +704,7 @@ const Pages = {
     }
     Modal.close();
     Toast.show('Movimiento registrado' + (tipo === 'Entrada' && costo ? ' · Gasto generado' : ''));
-    Router.go('inventario');
+    Router.go('productos');
   },
 
   // ---------- MOVIMIENTOS ----------
@@ -715,7 +713,7 @@ const Pages = {
     const movs = [...Store.state.movements].sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora));
     return `
       <div class="page-header">
-        <h1 class="page-title">Movimientos de inventario</h1>
+        <h1 class="page-title">Movimientos de stock</h1>
       </div>
       <div class="table-wrap">
         <table>
@@ -770,7 +768,7 @@ const Pages = {
         <input type="search" class="search-input" id="gasto-search" placeholder="Buscar por concepto..." oninput="Pages.filterGastos()" />
         <select class="filter-select" id="gasto-cat-filter" onchange="Pages.filterGastos()">
           <option value="">Todas las categorías</option>
-          <option value="Inventario">Inventario</option>
+          <option value="Stock">Compra de stock</option>
           <option value="Alquiler">Alquiler</option>
           <option value="Servicios">Servicios</option>
           <option value="Personal">Personal</option>
@@ -800,7 +798,7 @@ const Pages = {
         <td>${Utils.escapeHtml(e.concepto)}</td>
         <td><span class="badge badge-neutral">${Utils.escapeHtml(e.categoria)}</span></td>
         <td style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
-        <td>${e.origen === 'Manual' ? '<span class="badge badge-accent">Manual</span>' : '<span class="badge badge-success">Compra de inventario</span>'}</td>
+        <td>${e.origen === 'Manual' ? '<span class="badge badge-accent">Manual</span>' : '<span class="badge badge-success">Compra de stock</span>'}</td>
         <td>${Utils.escapeHtml(u ? u.nombres : '—')}</td>
       </tr>`;
     }).join('');
@@ -1058,8 +1056,8 @@ const Pages = {
       <div class="stat-cards" style="margin-bottom:1.25rem">
         <div class="stat-card">
           <div class="stat-label">${Auth.isAdmin() ? 'Total de ventas' : 'Mis ventas (total)'}</div>
-          <div class="stat-value amber">${Utils.formatMoney(total)}</div>
-          <div class="stat-sub">${sales.length} registro(s)</div>
+          <div class="stat-value amber" id="hist-total">${Utils.formatMoney(total)}</div>
+          <div class="stat-sub" id="hist-count">${sales.length} registro(s)</div>
         </div>
       </div>
       <div class="toolbar">
@@ -1067,7 +1065,8 @@ const Pages = {
         <select class="filter-select" id="hist-method" onchange="Pages.filterHistorial()">
           <option value="">Todos los métodos</option>
           <option value="Efectivo">Efectivo</option>
-          <option value="Yape/Plin">Yape/Plin</option>
+          <option value="Yape">Yape</option>
+          <option value="Plin">Plin</option>
           <option value="Tarjeta">Tarjeta</option>
         </select>
         <input type="date" id="hist-date" class="filter-select" onchange="Pages.filterHistorial()" />
@@ -1092,7 +1091,7 @@ const Pages = {
         const p = Store.getProduct(i.productoId);
         return `${p?.nombre || '?'} ×${i.cantidad}`;
       }).join(', ');
-      return `<tr data-method="${s.metodoPago}" data-date="${s.fecha}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
+      return `<tr data-method="${Utils.escapeHtml(String(s.metodoPago || ''))}" data-date="${s.fecha}" data-total="${Number(s.total || 0)}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
         <td>${Utils.formatDate(s.fecha)}</td>
         <td>${s.hora.slice(0,5)}</td>
         <td>${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
@@ -1104,16 +1103,21 @@ const Pages = {
     }).join('');
   },
   filterHistorial() {
-    const method = document.getElementById('hist-method')?.value || '';
+    const method = (document.getElementById('hist-method')?.value || '').trim().toLowerCase();
     const date = document.getElementById('hist-date')?.value || '';
-    const q = (document.getElementById('hist-search')?.value || '').toLowerCase();
-    document.querySelectorAll('#hist-tbody tr').forEach(tr => {
-      const m = tr.getAttribute('data-method') || '';
-      const d = tr.getAttribute('data-date') || '';
-      const s = tr.getAttribute('data-search') || '';
-      const match = (!method || m === method) && (!date || d === date) && (!q || s.includes(q));
+    const q = (document.getElementById('hist-search')?.value || '').trim().toLowerCase();
+    let count = 0, total = 0;
+    document.querySelectorAll('#hist-tbody tr[data-method]').forEach(tr => {
+      const m = (tr.dataset.method || '').trim().toLowerCase();
+      const d = (tr.dataset.date || '').trim();
+      const text = (tr.dataset.search || '').toLowerCase();
+      const match = (!method || m === method) && (!date || d === date) && (!q || text.includes(q));
       tr.style.display = match ? '' : 'none';
+      if (match) { count++; total += Number(tr.dataset.total || 0); }
     });
+    const totalEl = document.getElementById('hist-total'), countEl = document.getElementById('hist-count');
+    if (totalEl) totalEl.textContent = Utils.formatMoney(total);
+    if (countEl) countEl.textContent = `${count} registro(s)`;
   },
   showSaleDetail(id) {
     const s = Store.state.sales.find(x => x.id === id);
@@ -1195,9 +1199,24 @@ const Pages = {
     }
   },
   caja() {
-    const u=Auth.currentUser(), abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
+    const u=Auth.currentUser();
+    const abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
+    const hoy=Store.today();
+    const ventasHoy=Store.state.sales.filter(s=>s.empleadoId===u.id&&s.fecha===hoy&&s.estado!=='Anulada');
+    const sum=m=>ventasHoy.filter(s=>(s.metodoPago||'')===m).reduce((a,b)=>a+Number(b.total||0),0);
+    const efectivo=sum('Efectivo'), yape=sum('Yape'), plin=sum('Plin'), tarjeta=sum('Tarjeta');
+    const totalDia=efectivo+yape+plin+tarjeta;
+    const esperado=Number(abierta?.montoInicial||0)+efectivo;
     const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
-    return `<div class="page-header"><h1 class="page-title">💰 ${Auth.isAdmin()?'Caja':'Mi caja'}</h1></div><div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Caja abierta':'Abrir caja'}</h5>${abierta?`<p>Inicial: <strong>${Utils.formatMoney(abierta.montoInicial)}</strong></p><input id="cash-real" class="form-control mb-2" type="number" step="0.01" placeholder="Efectivo real"><button class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja</button>`:`<input id="cash-initial" class="form-control mb-2" type="number" step="0.01" value="0"><button class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div><div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Inicial</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody>${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${Utils.formatMoney(c.montoInicial||0)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="5">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
+    return `<div class="page-header"><h1 class="page-title">💰 ${Auth.isAdmin()?'Caja':'Mi caja'}</h1></div>
+      <div class="stat-cards mb-3">
+        <div class="stat-card"><div class="stat-label">Ventas totales de hoy</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div>
+        <div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Esperado en caja: ${Utils.formatMoney(esperado)}</div></div>
+        <div class="stat-card"><div class="stat-label">Yape + Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(yape)} · Plin ${Utils.formatMoney(plin)}</div></div>
+        <div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Ventas del día</div></div>
+      </div>
+      <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
+      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody>${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
   },
   async openCash(){const r=await Store.openCash(Number(document.getElementById('cash-initial').value)||0);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
   async closeCash(){const r=await Store.closeCash(Number(document.getElementById('cash-real').value)||0);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
@@ -1218,7 +1237,7 @@ const Pages = {
         </div></div>
         <div class="col-12 col-lg-6"><div class="card p-3">
           <h5>Aplicación</h5><p>La configuración sensible de Firebase permanece en <code>firebase-config.js</code>.</p>
-          <p class="mb-0">Los cambios administrativos del negocio se realizan desde Productos, Categorías, Empleados, Caja e Inventario.</p>
+          <p class="mb-0">Los cambios administrativos del negocio se realizan desde Productos, Categorías, Empleados, Caja y Movimientos.</p>
         </div></div>
       </div>`;
   }

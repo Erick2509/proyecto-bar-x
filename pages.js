@@ -1103,21 +1103,34 @@ const Pages = {
     }).join('');
   },
   filterHistorial() {
+    // Filtrar desde los datos, no ocultando filas. Así funciona igual en tabla desktop
+    // y en las tarjetas responsive de móvil/tablet.
     const method = (document.getElementById('hist-method')?.value || '').trim().toLowerCase();
     const date = document.getElementById('hist-date')?.value || '';
     const q = (document.getElementById('hist-search')?.value || '').trim().toLowerCase();
-    let count = 0, total = 0;
-    document.querySelectorAll('#hist-tbody tr[data-method]').forEach(tr => {
-      const m = (tr.dataset.method || '').trim().toLowerCase();
-      const d = (tr.dataset.date || '').trim();
-      const text = (tr.dataset.search || '').toLowerCase();
-      const match = (!method || m === method) && (!date || d === date) && (!q || text.includes(q));
-      tr.style.display = match ? '' : 'none';
-      if (match) { count++; total += Number(tr.dataset.total || 0); }
+    const user = Auth.currentUser();
+    let sales = [...Store.state.sales];
+    if (Auth.isEmployee()) sales = sales.filter(s => s.empleadoId === user.id);
+
+    sales = sales.filter(s => {
+      const saleMethod = String(s.metodoPago || '').trim().toLowerCase();
+      const saleDate = String(s.fecha || '').trim();
+      const emp = Store.getUser(s.empleadoId);
+      const products = (s.items || []).map(i => Store.getProduct(i.productoId)?.nombre || '').join(' ');
+      const haystack = `${s.numero || s.id || ''} ${emp?.nombres || s.empleadoNombre || ''} ${emp?.apellidos || ''} ${products} ${s.metodoPago || ''}`.toLowerCase();
+      return (!method || saleMethod === method) && (!date || saleDate === date) && (!q || haystack.includes(q));
     });
+    sales.sort((a,b) => (`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
+
+    const tbody = document.getElementById('hist-tbody');
+    if (tbody) {
+      tbody.innerHTML = this._histRows(sales);
+      Router.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
+    }
+    const total = sales.reduce((sum, s) => sum + Number(s.total || 0), 0);
     const totalEl = document.getElementById('hist-total'), countEl = document.getElementById('hist-count');
     if (totalEl) totalEl.textContent = Utils.formatMoney(total);
-    if (countEl) countEl.textContent = `${count} registro(s)`;
+    if (countEl) countEl.textContent = `${sales.length} registro(s)`;
   },
   showSaleDetail(id) {
     const s = Store.state.sales.find(x => x.id === id);

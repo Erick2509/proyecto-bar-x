@@ -1113,3 +1113,66 @@ textarea{min-height:88px}
 .stat-card .stat-value { font-weight: 800; }
 .stat-card .stat-sub { color: var(--text-secondary); font-weight: 600; }
 .dash-grid h3 { font-weight: 800; color: var(--text-primary); }
+
+/* ===== RESPONSIVE + CONTRASTE v10 ===== */
+/* Contraste global: todo texto de datos debe distinguirse sobre el tema oscuro. */
+body, .main-content, .card, .stat-card, .table-wrap, table, tbody, td { color: var(--text-primary); }
+td { color: #eee8de; font-weight: 500; }
+th { color: #d6c9b8; font-weight: 800; }
+.card h1,.card h2,.card h3,.card h4,.page-title { color:#fff; }
+.stat-card .stat-label { color:#f4eee5; font-weight:800; }
+.stat-card .stat-sub { color:#c7bdaf; font-weight:600; }
+.ai-name { color:#f5f0e8; font-weight:700; }
+.ai-stock, .ss-meta, .dr-label { color:#c7bdaf; }
+input, select, textarea { color:#f7f3ed; }
+input::placeholder, textarea::placeholder { color:#9f9689; opacity:1; }
+select option { background:#1c1a16; color:#f7f3ed; }
+
+/* Desde tablet/móvil se reorganizan TODAS las tablas en tarjetas. Esto evita
+   scroll horizontal como el de Ventas recientes de la captura. */
+@media (max-width: 1024px) {
+  .table-wrap, .table-responsive { overflow:visible !important; border:0 !important; background:transparent !important; }
+  .responsive-data-table, .table-wrap .responsive-data-table, .table-responsive .responsive-data-table {
+    display:block !important; width:100% !important; min-width:0 !important; max-width:100% !important;
+    border:0 !important; background:transparent !important;
+  }
+  .responsive-data-table thead {
+    position:absolute !important; width:1px !important; height:1px !important; padding:0 !important;
+    margin:-1px !important; overflow:hidden !important; clip:rect(0,0,0,0) !important;
+    white-space:nowrap !important; border:0 !important;
+  }
+  .responsive-data-table tbody { display:grid !important; grid-template-columns:1fr !important; gap:.8rem !important; width:100% !important; }
+  .responsive-data-table tbody tr {
+    display:grid !important; grid-template-columns:1fr !important; width:100% !important; min-width:0 !important;
+    padding:.35rem 1rem !important; border:1px solid #3b352d !important; border-radius:14px !important;
+    background:#1a1814 !important; box-shadow:0 4px 16px rgba(0,0,0,.16); overflow:hidden !important;
+  }
+  .responsive-data-table tbody td {
+    display:grid !important; grid-template-columns:minmax(92px,38%) minmax(0,1fr) !important;
+    align-items:center !important; gap:.75rem !important; width:100% !important; max-width:none !important;
+    min-width:0 !important; padding:.72rem 0 !important; border:0 !important; border-bottom:1px solid #332e27 !important;
+    white-space:normal !important; overflow-wrap:anywhere !important; text-align:right !important;
+    color:#f2ede5 !important;
+  }
+  .responsive-data-table tbody td:last-child { border-bottom:0 !important; }
+  .responsive-data-table tbody td::before {
+    content:attr(data-label); color:#cfc4b5 !important; font-size:.72rem; font-weight:800;
+    letter-spacing:.045em; text-transform:uppercase; text-align:left;
+  }
+  .responsive-data-table td.table-actions, .responsive-data-table tbody td[data-label="Acciones"] {
+    grid-template-columns:1fr !important; text-align:left !important; gap:.55rem !important;
+  }
+  .responsive-data-table td.table-actions .btn, .responsive-data-table tbody td[data-label="Acciones"] .btn { width:100% !important; margin:0 !important; }
+  .responsive-data-table tr.mobile-empty-row { display:block !important; padding:0 !important; }
+  .responsive-data-table tr.mobile-empty-row td { display:block !important; text-align:center !important; border:0 !important; padding:1rem !important; }
+  .responsive-data-table tr.mobile-empty-row td::before { display:none !important; }
+
+  .toolbar { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.65rem; width:100%; }
+  .toolbar > * { width:100% !important; min-width:0 !important; max-width:none !important; }
+}
+@media (max-width: 640px) {
+  .toolbar { grid-template-columns:1fr !important; }
+  .responsive-data-table tbody tr { padding:.25rem .8rem !important; }
+  .responsive-data-table tbody td { grid-template-columns:minmax(82px,36%) minmax(0,1fr) !important; gap:.55rem !important; }
+  .stat-card .stat-value { font-size:1.5rem; }
+}

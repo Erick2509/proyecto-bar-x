@@ -1029,7 +1029,7 @@ const Pages = {
         <div class="sale-success">
           <div class="ss-icon">✅</div>
           <h2>¡Venta registrada!</h2>
-          <p class="ss-meta">N° ${s.id}</p>
+          <p class="ss-meta">N° ${s.numero || s.id}</p>
           <div class="ss-total">Venta guardada correctamente</div>
           <p class="ss-meta">Método: ${s.metodoPago}</p>
           <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-top:1.5rem">
@@ -1095,7 +1095,7 @@ const Pages = {
       return `<tr data-method="${s.metodoPago}" data-date="${s.fecha}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
         <td>${Utils.formatDate(s.fecha)}</td>
         <td>${s.hora.slice(0,5)}</td>
-        <td>${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : '—')}</td>
+        <td>${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td>
         <td style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td>
         <td>${s.metodoPago}</td>
@@ -1126,7 +1126,7 @@ const Pages = {
       </div>
       <div class="modal-body">
         <div class="detail-row"><span class="dr-label">Fecha</span><span class="dr-value">${Utils.formatDate(s.fecha)} ${s.hora}</span></div>
-        <div class="detail-row"><span class="dr-label">Empleado</span><span class="dr-value">${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : '—')}</span></div>
+        <div class="detail-row"><span class="dr-label">Empleado</span><span class="dr-value">${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</span></div>
         <div class="detail-row"><span class="dr-label">Método de pago</span><span class="dr-value">${s.metodoPago}</span></div>
         <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem">Productos</h4>
         <div class="table-wrap">

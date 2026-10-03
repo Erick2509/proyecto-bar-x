@@ -35,6 +35,11 @@ service cloud.firestore {
       allow read: if admin() || (active() && resource.data.empleadoId == request.auth.uid);
       allow create: if active()
         && request.resource.data.empleadoId == request.auth.uid
+        && request.resource.data.cajaId is string
+        && exists(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId))
+        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
+        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.estado == 'Abierta'
+        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.fecha == request.resource.data.fecha
         && request.resource.data.estado == 'Completada'
         && validPayment(request.resource.data.metodoPago)
         && positiveNumber(request.resource.data.total)
@@ -68,7 +73,7 @@ service cloud.firestore {
         && request.resource.data.usuarioId == request.auth.uid
         && resource.data.estado == 'Abierta'
         && request.resource.data.estado == 'Cerrada'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia']));
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']));
       allow delete: if false;
     }
     match /audits/{id} {

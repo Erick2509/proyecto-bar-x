@@ -50,7 +50,7 @@ const Pages = {
                   ${recent.map(s => {
                     const emp = Store.getUser(s.empleadoId);
                     return `<tr>
-                      <td>${Utils.formatDate(s.fecha)} ${s.hora.slice(0,5)}</td>
+                      <td>${Utils.formatDate(s.fecha)} ${String(s.hora||'—').slice(0,5)}</td>
                       <td>${Utils.escapeHtml(emp ? emp.nombres : '—')}</td>
                       <td style="color:var(--amber)">${Utils.formatMoney(s.total)}</td>
                       <td>${s.metodoPago}</td>
@@ -90,8 +90,8 @@ const Pages = {
   // ---------- DASHBOARD EMPLEADO ----------
   dashboardEmployee() {
     const user = Auth.currentUser();
-    const mySales = Store.state.sales.filter(s => s.empleadoId === user.id);
-    const today = Utils.todayISO();
+    const mySales = Store.state.sales.filter(s => s.empleadoId === user.id && s.estado !== 'Anulada');
+    const today = Store.today();
     const myToday = mySales.filter(s => s.fecha === today);
     const totalToday = myToday.reduce((s, x) => s + x.total, 0);
     const totalAll = mySales.reduce((s, x) => s + x.total, 0);
@@ -972,6 +972,16 @@ const Pages = {
   openPago() {
     const total = Store.getCartTotal();
     if (Store.state.cart.length === 0) return;
+    const u = Auth.currentUser();
+    const hoy = Store.today();
+    const cajaAbierta = Store.state.cashSessions.find(c => c.usuarioId === u.id && c.estado === 'Abierta' && c.fecha === hoy);
+    if (!cajaAbierta) {
+      Modal.open(`
+        <div class="modal-header"><h2>⚠️ Caja cerrada</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
+        <div class="modal-body"><p style="font-size:1rem;line-height:1.6">Antes de registrar una venta debes <strong>abrir la caja del día</strong>.</p><p style="color:var(--text-secondary)">Ve a <strong>Caja</strong>, ingresa el monto inicial en efectivo y pulsa <strong>Abrir caja</strong>.</p></div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Ir a Caja</button></div>`);
+      return;
+    }
     Modal.open(`
       <div class="modal-header">
         <h2>Confirmar pago</h2>
@@ -1011,10 +1021,14 @@ const Pages = {
     el.classList.add('selected');
   },
   async confirmPago() {
+    const btn=document.getElementById('btn-confirm-pay');
+    if(btn?.disabled)return;
     const selected = document.querySelector('.pay-method.selected');
     const method = selected?.getAttribute('data-method') || 'Efectivo';
+    if(btn){btn.disabled=true;btn.textContent='Procesando...';}
     const res = await Store.confirmSale(method);
     if (!res.ok) {
+      if(btn){btn.disabled=false;btn.textContent='Confirmar pago';}
       Toast.show(res.error, 'error');
       return;
     }
@@ -1047,7 +1061,7 @@ const Pages = {
       sales = sales.filter(s => s.empleadoId === user.id);
     }
     sales.sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora));
-    const total = sales.reduce((s, x) => s + x.total, 0);
+    const total = sales.filter(x=>x.estado!=='Anulada').reduce((sum,x)=>sum+Number(x.total||0),0);
 
     return `
       <div class="page-header">
@@ -1074,7 +1088,7 @@ const Pages = {
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Fecha</th><th>Hora</th><th>Empleado</th><th>Productos</th><th>Total</th><th>Método</th><th></th></tr>
+            <tr><th>Fecha</th><th>Hora</th><th>Empleado</th><th>Productos</th><th>Total</th><th>Método</th><th>Estado</th><th></th></tr>
           </thead>
           <tbody id="hist-tbody">
             ${this._histRows(sales)}
@@ -1084,7 +1098,7 @@ const Pages = {
     `;
   },
   _histRows(sales) {
-    if (!sales.length) return `<tr><td colspan="7">${Components.empty('🧾', 'Todavía no hay ventas registradas')}</td></tr>`;
+    if (!sales.length) return `<tr><td colspan="8">${Components.empty('🧾', 'Todavía no hay ventas registradas')}</td></tr>`;
     return sales.map(s => {
       const emp = Store.getUser(s.empleadoId);
       const prodSummary = s.items.map(i => {
@@ -1093,11 +1107,12 @@ const Pages = {
       }).join(', ');
       return `<tr data-method="${Utils.escapeHtml(String(s.metodoPago || ''))}" data-date="${s.fecha}" data-total="${Number(s.total || 0)}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
         <td>${Utils.formatDate(s.fecha)}</td>
-        <td>${s.hora.slice(0,5)}</td>
+        <td>${String(s.hora||'—').slice(0,5)}</td>
         <td>${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td>
         <td style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td>
-        <td>${s.metodoPago}</td>
+        <td>${Utils.escapeHtml(s.metodoPago||'—')}</td>
+        <td>${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td>
         <td><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">Ver</button> ${Auth.isAdmin() && s.estado !== 'Anulada' ? `<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>` : ''}</td>
       </tr>`;
     }).join('');
@@ -1127,7 +1142,7 @@ const Pages = {
       tbody.innerHTML = this._histRows(sales);
       Router.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
     }
-    const total = sales.reduce((sum, s) => sum + Number(s.total || 0), 0);
+    const total = sales.filter(s=>s.estado!=='Anulada').reduce((sum, s) => sum + Number(s.total || 0), 0);
     const totalEl = document.getElementById('hist-total'), countEl = document.getElementById('hist-count');
     if (totalEl) totalEl.textContent = Utils.formatMoney(total);
     if (countEl) countEl.textContent = `${sales.length} registro(s)`;
@@ -1215,24 +1230,27 @@ const Pages = {
     const u=Auth.currentUser();
     const abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
     const hoy=Store.today();
-    const ventasHoy=Store.state.sales.filter(s=>s.empleadoId===u.id&&s.fecha===hoy&&s.estado!=='Anulada');
+    const fechaCaja=abierta?.fecha||hoy;
+    const ventasHoy=Store.state.sales.filter(s=>s.empleadoId===u.id&&s.fecha===fechaCaja&&s.estado!=='Anulada');
     const sum=m=>ventasHoy.filter(s=>(s.metodoPago||'')===m).reduce((a,b)=>a+Number(b.total||0),0);
     const efectivo=sum('Efectivo'), yape=sum('Yape'), plin=sum('Plin'), tarjeta=sum('Tarjeta');
     const totalDia=efectivo+yape+plin+tarjeta;
     const esperado=Number(abierta?.montoInicial||0)+efectivo;
     const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
+    const cajaAnterior=abierta&&abierta.fecha!==hoy;
     return `<div class="page-header"><h1 class="page-title">💰 ${Auth.isAdmin()?'Caja':'Mi caja'}</h1></div>
+      ${cajaAnterior?`<div class="alert alert-warning mb-3"><strong>⚠️ Hay una caja del ${abierta.fecha} todavía abierta.</strong> Debes cerrarla antes de abrir la caja de hoy. Las ventas nuevas permanecerán bloqueadas hasta entonces.</div>`:''}
       <div class="stat-cards mb-3">
         <div class="stat-card"><div class="stat-label">Ventas totales de hoy</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div>
         <div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Esperado en caja: ${Utils.formatMoney(esperado)}</div></div>
         <div class="stat-card"><div class="stat-label">Yape + Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(yape)} · Plin ${Utils.formatMoney(plin)}</div></div>
         <div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Ventas del día</div></div>
       </div>
-      <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
+      <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button id="btn-close-cash" class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button id="btn-open-cash" class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
       <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody>${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
   },
-  async openCash(){const r=await Store.openCash(Number(document.getElementById('cash-initial').value)||0);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
-  async closeCash(){const r=await Store.closeCash(Number(document.getElementById('cash-real').value)||0);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
+  async openCash(){const b=document.getElementById('btn-open-cash');if(b?.disabled)return;if(b){b.disabled=true;b.textContent='Abriendo...';}const r=await Store.openCash(Number(document.getElementById('cash-initial').value)||0);if(!r.ok&&b){b.disabled=false;b.textContent='Abrir caja';}Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
+  async closeCash(){const b=document.getElementById('btn-close-cash');if(b?.disabled)return;if(b){b.disabled=true;b.textContent='Cerrando...';}const r=await Store.closeCash(Number(document.getElementById('cash-real').value)||0);if(!r.ok&&b){b.disabled=false;b.textContent='Cerrar caja del día';}Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
   reportes(){if(!Auth.requireAdmin())return '';const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),gastos=Store.totalExpenses(),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+s.total);return `<div class="page-header"><h1 class="page-title">📈 Reportes</h1></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
   async anularVenta(id){const motivo=prompt('Motivo de anulación:');if(!motivo)return;const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok)Router.go('historial')}
 ,

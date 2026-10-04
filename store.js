@@ -65,25 +65,18 @@ const Store = (() => {
     const u=state.currentUser,t=limaParts();
     if(!u)return{ok:false,error:'Sesión no válida'};
     if(state.cashSessions.some(x=>x.usuarioId===u.id&&x.estado==='Abierta'))return{ok:false,error:'Ya tienes una caja abierta'};
-    if(state.cashSessions.some(x=>x.usuarioId===u.id&&x.fecha===t.fecha&&x.estado==='Cerrada'))return{ok:false,error:'La caja de hoy ya fue cerrada'};
-    // ID determinista: evita que un doble clic cree dos cajas para el mismo usuario/día.
-    const cashId=`${u.id}_${t.fecha}`,ref=db.collection('cashSessions').doc(cashId);
+    // Se permiten varios turnos en un mismo día, pero nunca más de una caja abierta por usuario.
+    // Usamos un ID nuevo por apertura; el botón se bloquea mientras se procesa para evitar doble clic.
+    const ref=db.collection('cashSessions').doc(), cashId=ref.id;
     try{
-      // No hacemos una lectura transaccional previa de un documento inexistente:
-      // para empleados esa lectura era rechazada por las reglas de Firestore.
-      // El ID usuario+fecha y las reglas de update impiden sobrescribir una caja existente.
+      // Creación directa: funciona igual para Administrador y Empleado.
+      // Una caja cerrada queda como historial y una nueva apertura crea un turno nuevo.
       const payload={...t,usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),montoInicial:+initial.toFixed(2),estado:'Abierta',createdAt:firebase.firestore.FieldValue.serverTimestamp()};
       await ref.set(payload);
       if(!state.cashSessions.some(x=>x.id===cashId))state.cashSessions.push({id:cashId,...t,usuarioId:u.id,usuarioNombre:payload.usuarioNombre,montoInicial:+initial.toFixed(2),estado:'Abierta'});
       try{await audit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
       return{ok:true,id:cashId};
     }catch(e){
-      // Si el documento ya existe, la regla de update lo rechaza. Intentamos leerlo
-      // (ahora sí existe y pertenece al usuario) para mostrar un mensaje útil.
-      try{
-        const snap=await ref.get();
-        if(snap.exists){const d=snap.data();return{ok:false,error:d.estado==='Abierta'?'La caja de hoy ya está abierta':'La caja de hoy ya fue cerrada'};}
-      }catch(_){}
       return{ok:false,error:e?.code==='permission-denied'?'No se pudo abrir la caja. Verifica que hayas publicado las reglas Firestore incluidas en esta versión.':(e.message||'No se pudo abrir la caja')}
     }
   }

@@ -1222,3 +1222,17 @@ select option { background:#1c1a16; color:#f7f3ed; }
   .card p, .product-card p, .detail-row .dr-label,
   .ss-meta, .ai-stock { color:#d8cdbf !important; opacity:1 !important; }
 }
+
+
+/* ===== v19: etiquetas responsive después de filtros dinámicos ===== */
+@media (max-width: 1024px) {
+  .responsive-data-table tbody td[data-label]::before {
+    content: attr(data-label) !important;
+    color: #f0e5d6 !important;
+    -webkit-text-fill-color: #f0e5d6 !important;
+    opacity: 1 !important;
+    display: block !important;
+    visibility: visible !important;
+    font-weight: 800 !important;
+  }
+}

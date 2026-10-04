@@ -66,3 +66,7 @@ Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 7
 - Bloqueo anti doble clic/toque en operaciones de escritura.
 - Capa adicional de bloqueo en Store para evitar escrituras duplicadas concurrentes.
 - Validación de cantidades, costos, montos de caja y gastos antes de confirmar.
+
+
+## v19
+Corrige etiquetas invisibles en tarjetas responsive después de aplicar filtros dinámicos en Productos e Historial de ventas. Tras reconstruir filas se vuelven a generar los atributos data-label.

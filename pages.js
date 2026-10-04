@@ -480,6 +480,8 @@ const Pages = {
         <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
       `)).join('') || Components.empty('📦', 'Sin resultados');
     }
+    // El filtro reconstruye las filas; volver a aplicar data-label para las tarjetas responsive.
+    if (tbody) App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
   },
   openProductoForm(id) {
     const p = id ? Store.getProduct(id) : null;
@@ -1141,6 +1143,7 @@ const Pages = {
     const tbody = document.getElementById('hist-tbody');
     if (tbody) {
       tbody.innerHTML = this._histRows(sales);
+      App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || tbody.closest('.table-responsive') || document);
       Router.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
     }
     const total = sales.filter(s=>s.estado!=='Anulada').reduce((sum, s) => sum + Number(s.total || 0), 0);

@@ -51,3 +51,11 @@ Conserva tu `firebase-config.js` que ya funciona en Vercel y reemplaza el resto 
 
 ## v7 móvil
 Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 768 px. No se eliminan campos ni acciones; los encabezados pasan a ser etiquetas dentro de cada tarjeta. Escritorio conserva las tablas.
+
+
+## v14 - Corrección apertura de caja
+- Corrige la primera apertura de caja para empleados: se eliminó la lectura transaccional de un documento inexistente que Firestore rechazaba.
+- Mantiene un único documento de caja por usuario y fecha.
+- Las reglas impiden reabrir/sobrescribir una caja existente y solo permiten Abierta → Cerrada.
+- La auditoría no hace fallar una apertura que ya se realizó correctamente.
+- Caché PWA actualizado a proyecto-x-v14.

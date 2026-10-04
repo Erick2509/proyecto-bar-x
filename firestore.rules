@@ -68,12 +68,13 @@ service cloud.firestore {
         && request.resource.data.usuarioId == request.auth.uid
         && request.resource.data.estado == 'Abierta'
         && positiveNumber(request.resource.data.montoInicial);
-      allow update: if admin() || (active()
-        && resource.data.usuarioId == request.auth.uid
-        && request.resource.data.usuarioId == request.auth.uid
+      // Nadie puede reutilizar una caja existente para volver a "abrirla".
+      // Admin y propietario solo pueden realizar la transición Abierta -> Cerrada.
+      allow update: if (admin() || (active() && resource.data.usuarioId == request.auth.uid))
+        && request.resource.data.usuarioId == resource.data.usuarioId
         && resource.data.estado == 'Abierta'
         && request.resource.data.estado == 'Cerrada'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']));
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']);
       allow delete: if false;
     }
     match /audits/{id} {

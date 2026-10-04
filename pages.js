@@ -35,8 +35,14 @@ const Pages = {
     const recent = [...allSales].sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora)).slice(0, 6);
 
     return `
-      <div class="page-header">
-        <h1 class="page-title">Dashboard</h1>
+      <div class="page-header ux-page-head">
+        <div><h1 class="page-title">Inicio</h1><p class="ux-page-sub">Resumen de hoy y accesos rápidos</p></div>
+      </div>
+      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===Store.today()); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Abierta ${String(c.hora||'').slice(0,5)} · Inicial ${Utils.formatMoney(c.montoInicial||0)}`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      <div class="ux-quick-actions">
+        <button class="ux-action primary" onclick="Router.go('ventas')"><span>🛒</span><b>Nueva venta</b><small>Cobrar productos</small></button>
+        <button class="ux-action" onclick="Router.go('productos')"><span>📦</span><b>Agregar stock</b><small>Productos existentes</small></button>
+        <button class="ux-action" onclick="Router.go('gastos')"><span>💸</span><b>Registrar gasto</b><small>Control de egresos</small></button>
       </div>
       <div class="stat-cards">
         <div class="stat-card">
@@ -121,9 +127,8 @@ const Pages = {
     const low = Store.lowStockProducts();
 
     return `
-      <div class="page-header">
-        <h1 class="page-title">Hola, ${Utils.escapeHtml(user.nombres)}</h1>
-      </div>
+      <div class="page-header ux-page-head"><div><h1 class="page-title">Hola, ${Utils.escapeHtml(user.nombres)}</h1><p class="ux-page-sub">Tu actividad de hoy</p></div></div>
+      ${(() => { const c=Store.state.cashSessions.find(x=>x.usuarioId===user.id&&x.estado==='Abierta'&&x.fecha===today); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?'Ya puedes registrar ventas':'Debes abrir caja antes de vender'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
       <div class="stat-cards">
         <div class="stat-card">
           <div class="stat-label">Mis ventas de hoy</div>
@@ -168,7 +173,7 @@ const Pages = {
   // ---------- EMPLEADOS ----------
   empleados() {
     if (!Auth.requireAdmin()) return '';
-    const users = Store.state.users.filter(u => u.role === 'empleado' || true); // show all
+    const users = Store.state.users.filter(u => u.role === 'empleado');
     return `
       <div class="page-header">
         <h1 class="page-title">Empleados</h1>
@@ -933,9 +938,9 @@ const Pages = {
             <span class="cart-total-label">Total</span>
             <span class="cart-total-value">${Utils.formatMoney(total)}</span>
           </div>
-          <button class="btn btn-amber btn-full" style="margin-top:1rem;padding:0.9rem;font-size:1.05rem" 
+          <button class="btn btn-amber btn-full ux-checkout-btn" 
             ${cart.length === 0 ? 'disabled' : ''} onclick="Pages.openPago()">
-            Pagar ${cart.length ? Utils.formatMoney(total) : ''}
+            Cobrar ${cart.length ? '· ' + Utils.formatMoney(total) : ''}
           </button>
         </div>
       </div>
@@ -1252,25 +1257,19 @@ const Pages = {
   caja() {
     const u=Auth.currentUser();
     const abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
-    const hoy=Store.today();
-    const fechaCaja=abierta?.fecha||hoy;
+    const hoy=Store.today(), fechaCaja=abierta?.fecha||hoy;
     const ventasHoy=Store.state.sales.filter(s=>s.empleadoId===u.id&&s.fecha===fechaCaja&&s.estado!=='Anulada');
     const sum=m=>ventasHoy.filter(s=>(s.metodoPago||'')===m).reduce((a,b)=>a+Number(b.total||0),0);
-    const efectivo=sum('Efectivo'), yape=sum('Yape'), plin=sum('Plin'), tarjeta=sum('Tarjeta');
-    const totalDia=efectivo+yape+plin+tarjeta;
+    const efectivo=sum('Efectivo'),yape=sum('Yape'),plin=sum('Plin'),tarjeta=sum('Tarjeta'),totalDia=efectivo+yape+plin+tarjeta;
     const esperado=Number(abierta?.montoInicial||0)+efectivo;
     const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
     const cajaAnterior=abierta&&abierta.fecha!==hoy;
-    return `<div class="page-header"><h1 class="page-title">💰 ${Auth.isAdmin()?'Caja':'Mi caja'}</h1></div>
-      ${cajaAnterior?`<div class="alert alert-warning mb-3"><strong>⚠️ Hay una caja del ${abierta.fecha} todavía abierta.</strong> Debes cerrarla antes de abrir la caja de hoy. Las ventas nuevas permanecerán bloqueadas hasta entonces.</div>`:''}
-      <div class="stat-cards mb-3">
-        <div class="stat-card"><div class="stat-label">Ventas totales de hoy</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div>
-        <div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Esperado en caja: ${Utils.formatMoney(esperado)}</div></div>
-        <div class="stat-card"><div class="stat-label">Yape + Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(yape)} · Plin ${Utils.formatMoney(plin)}</div></div>
-        <div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Ventas del día</div></div>
-      </div>
-      <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button id="btn-close-cash" class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button id="btn-open-cash" class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
-      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td data-label="Fecha">${c.fecha} ${c.hora?.slice(0,5)||''}</td><td data-label="Usuario">${Utils.escapeHtml(c.usuarioNombre||'')}</td><td data-label="Ventas del día">${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td data-label="Efectivo">${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td data-label="Yape">${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td data-label="Plin">${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td data-label="Tarjeta">${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td data-label="Estado">${c.estado}</td><td data-label="Diferencia">${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
+    return `<div class="page-header ux-page-head"><div><h1 class="page-title">Caja</h1><p class="ux-page-sub">Apertura, ventas y cierre de turno</p></div></div>
+      ${cajaAnterior?`<div class="alert alert-warning"><strong>⚠️ Caja pendiente del ${abierta.fecha}</strong><br>Ciérrala antes de registrar ventas de hoy.</div>`:''}
+      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Apertura ${String(abierta.hora||'').slice(0,5)} · Inicial ${Utils.formatMoney(abierta.montoInicial||0)}`:'Abre una caja para comenzar a vender'}</p></div></div></div>
+      <div class="stat-cards ux-payment-summary"><div class="stat-card"><div class="stat-label">Total vendido</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div><div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">En caja: ${Utils.formatMoney(esperado)}</div></div><div class="stat-card"><div class="stat-label">Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">${Utils.formatMoney(yape)} / ${Utils.formatMoney(plin)}</div></div><div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos electrónicos</div></div></div>
+      <div class="ux-cash-layout"><div class="card ux-cash-action"><h3>${abierta?'Cerrar caja':'Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Cuenta solo el dinero físico disponible en caja.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Dinero disponible antes de realizar la primera venta.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
+      <div class="card"><div class="ux-section-head"><div><h3>Historial de caja</h3><p>Sesiones anteriores y diferencias</p></div></div><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td data-label="Fecha">${c.fecha} ${c.hora?.slice(0,5)||''}</td><td data-label="Usuario">${Utils.escapeHtml(c.usuarioNombre||'')}</td><td data-label="Ventas del día">${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td data-label="Efectivo">${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td data-label="Yape">${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td data-label="Plin">${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td data-label="Tarjeta">${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td data-label="Estado">${c.estado}</td><td data-label="Diferencia">${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div>`;
   },
   openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},

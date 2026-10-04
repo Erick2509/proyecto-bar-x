@@ -194,12 +194,12 @@ const Pages = {
     if (!users.length) return `<tr><td colspan="6">${Components.empty('👥', 'No hay empleados registrados')}</td></tr>`;
     return users.map(u => `
       <tr data-search="${(u.nombres + ' ' + u.apellidos + ' ' + u.email).toLowerCase()}">
-        <td>${Utils.escapeHtml(u.nombres)}</td>
-        <td>${Utils.escapeHtml(u.apellidos)}</td>
-        <td>${Utils.escapeHtml(u.email)}</td>
-        <td>${Utils.escapeHtml(u.telefono || '—')}</td>
-        <td>${u.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</td>
-        <td class="table-actions">
+        <td data-label="Nombre">${Utils.escapeHtml(u.nombres)}</td>
+        <td data-label="Apellido">${Utils.escapeHtml(u.apellidos)}</td>
+        <td data-label="Correo">${Utils.escapeHtml(u.email)}</td>
+        <td data-label="Teléfono">${Utils.escapeHtml(u.telefono || '—')}</td>
+        <td data-label="Estado">${u.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</td>
+        <td class="table-actions" data-label="Acciones">
           <button class="btn btn-sm btn-secondary" onclick="Pages.openEmpleadoForm('${u.id}')">Editar</button>
           ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="Pages.deleteEmpleado('${u.id}')">Eliminar</button>` : ''}
         </td>
@@ -756,14 +756,14 @@ const Pages = {
                 const u = Store.getUser(m.usuarioId);
                 const tipoBadge = m.tipo === 'Venta' ? 'badge-accent' : m.tipo === 'Entrada' ? 'badge-success' : 'badge-warning';
                 return `<tr>
-                  <td>${Utils.formatDate(m.fecha)}</td>
-                  <td>${m.hora.slice(0,5)}</td>
-                  <td>${Utils.escapeHtml(p?.nombre || '—')}</td>
-                  <td><span class="badge ${tipoBadge}">${m.tipo}</span></td>
-                  <td>${m.cantidad}</td>
-                  <td>${m.stockAnterior}</td>
-                  <td><strong>${m.stockNuevo}</strong></td>
-                  <td>${Utils.escapeHtml(u ? u.nombres : '—')}</td>
+                  <td data-label="Fecha">${Utils.formatDate(m.fecha)}</td>
+                  <td data-label="Hora">${m.hora.slice(0,5)}</td>
+                  <td data-label="Producto">${Utils.escapeHtml(p?.nombre || '—')}</td>
+                  <td data-label="Tipo"><span class="badge ${tipoBadge}">${m.tipo}</span></td>
+                  <td data-label="Cantidad">${m.cantidad}</td>
+                  <td data-label="Stock ant.">${m.stockAnterior}</td>
+                  <td data-label="Stock nuevo"><strong>${m.stockNuevo}</strong></td>
+                  <td data-label="Usuario">${Utils.escapeHtml(u ? u.nombres : '—')}</td>
                 </tr>`;
               }).join('')}
           </tbody>
@@ -822,13 +822,13 @@ const Pages = {
     return list.map(e => {
       const u = Store.getUser(e.usuarioId);
       return `<tr data-concept="${e.concepto.toLowerCase()}" data-cat="${e.categoria}">
-        <td>${Utils.formatDate(e.fecha)}</td>
-        <td>${e.hora.slice(0,5)}</td>
-        <td>${Utils.escapeHtml(e.concepto)}</td>
-        <td><span class="badge badge-neutral">${Utils.escapeHtml(e.categoria)}</span></td>
-        <td style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
-        <td>${e.origen === 'Manual' ? '<span class="badge badge-accent">Manual</span>' : '<span class="badge badge-success">Compra de stock</span>'}</td>
-        <td>${Utils.escapeHtml(u ? u.nombres : '—')}</td>
+        <td data-label="Fecha">${Utils.formatDate(e.fecha)}</td>
+        <td data-label="Hora">${e.hora.slice(0,5)}</td>
+        <td data-label="Concepto">${Utils.escapeHtml(e.concepto)}</td>
+        <td data-label="Categoría"><span class="badge badge-neutral">${Utils.escapeHtml(e.categoria)}</span></td>
+        <td data-label="Monto" style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
+        <td data-label="Origen">${e.origen === 'Manual' ? '<span class="badge badge-accent">Manual</span>' : '<span class="badge badge-success">Compra de stock</span>'}</td>
+        <td data-label="Usuario">${Utils.escapeHtml(u ? u.nombres : '—')}</td>
       </tr>`;
     }).join('');
   },
@@ -1191,7 +1191,7 @@ const Pages = {
               ${s.items.map(i => {
                 const p = Store.getProduct(i.productoId);
                 return `<tr>
-                  <td>${Utils.escapeHtml(p?.nombre || '—')}</td>
+                  <td data-label="Producto">${Utils.escapeHtml(p?.nombre || '—')}</td>
                   <td>${i.cantidad}</td>
                   <td>${Utils.formatMoney(i.precioUnitario)}</td>
                   <td style="color:var(--amber)">${Utils.formatMoney(i.subtotal)}</td>
@@ -1270,7 +1270,7 @@ const Pages = {
         <div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Ventas del día</div></div>
       </div>
       <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button id="btn-close-cash" class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button id="btn-open-cash" class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
-      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
+      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td data-label="Fecha">${c.fecha} ${c.hora?.slice(0,5)||''}</td><td data-label="Usuario">${Utils.escapeHtml(c.usuarioNombre||'')}</td><td data-label="Ventas del día">${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td data-label="Efectivo">${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td data-label="Yape">${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td data-label="Plin">${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td data-label="Tarjeta">${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td data-label="Estado">${c.estado}</td><td data-label="Diferencia">${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
   },
   openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},

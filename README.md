@@ -70,3 +70,6 @@ Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 7
 
 ## v20
 Corrige etiquetas invisibles en tarjetas responsive después de aplicar filtros dinámicos en Productos e Historial de ventas. Tras reconstruir filas se vuelven a generar los atributos data-label.
+
+## v22
+Etiquetas responsive incorporadas directamente en filas de Gastos, Movimientos, Empleados e Historial de Caja, para conservarlas tras filtros, actualizaciones y paginación. Mantiene las correcciones directas de Productos e Historial de ventas.

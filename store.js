@@ -2,6 +2,8 @@
 const Store = (() => {
   const state = { users:[], categories:[], products:[], sales:[], movements:[], expenses:[], cashSessions:[], audits:[], currentUser:null, cart:[] };
   const refs = {};
+  const mutationLocks = new Set();
+  async function guarded(key, fn){ if(mutationLocks.has(key)) return {ok:false,error:'Esta operación ya se está procesando'}; mutationLocks.add(key); try{return await fn();}finally{mutationLocks.delete(key);} }
   const limaParts = () => {
     const parts = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).formatToParts(new Date());
     const x=Object.fromEntries(parts.map(p=>[p.type,p.value])); return {fecha:`${x.year}-${x.month}-${x.day}`,hora:`${x.hour}:${x.minute}:${x.second}`};
@@ -103,5 +105,5 @@ const Store = (() => {
       return{ok:true,diferencia:dif,totalVentasDia};
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser,updateUser,deleteUser,addCategory,updateCategory,deleteCategory,addProduct,updateProduct,deleteProduct,addMovement,addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale,cancelSale,addExpense,today,salesToday,expensesToday,totalSales,totalExpenses,openCash,closeCash,audit};
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),audit};
 })();

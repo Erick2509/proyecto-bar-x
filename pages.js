@@ -617,9 +617,12 @@ const Pages = {
     const motivo = (document.getElementById('stock-add-note')?.value || '').trim() || 'Compra de stock';
     if (!Number.isInteger(cantidad) || cantidad <= 0) return Toast.show('Ingresa una cantidad válida', 'error');
     if (!Number.isFinite(costo) || costo <= 0) return Toast.show('El costo unitario debe ser mayor que 0 para registrar el gasto', 'error');
+    const p = Store.getProduct(productoId); const total = cantidad * costo;
+    return confirmAction(`Se agregarán ${cantidad} unidad(es) a ${p?.nombre || 'este producto'} y se registrará un gasto de ${Utils.formatMoney(total)}. ¿Confirmar?`, async () => {
     const res = await Store.addMovement({ productoId, tipo:'Entrada', cantidad, costoUnitario:costo, motivo });
     if (!res.ok) return Toast.show(res.error || 'No se pudo agregar stock', 'error');
     Modal.close(); Toast.show('Stock agregado y gasto registrado', 'success'); Router.go('productos');
+    }, {title:'Confirmar ingreso de stock', confirmText:'Agregar stock', danger:false, key:'add-stock:'+productoId});
   },
   deleteProducto(id) {
     confirmAction('¿Desactivar este producto?', async () => {
@@ -693,11 +696,12 @@ const Pages = {
     const tipo = document.getElementById('mov-tipo').value;
     const cantidad = Number(document.getElementById('mov-cantidad').value);
     const costo = tipo === 'Entrada' ? Number(document.getElementById('mov-costo').value) : null;
-    if (cantidad <= 0) {
-      Toast.show('Cantidad inválida', 'error');
-      return;
-    }
-    const res = await Store.addMovement({ productoId, tipo, cantidad, costoUnitario: costo, motivo: document.getElementById('mov-motivo')?.value || '' });
+    if (!Number.isInteger(cantidad) || cantidad <= 0) { Toast.show('Cantidad inválida', 'error'); return; }
+    if (tipo === 'Entrada' && (!Number.isFinite(costo) || costo < 0)) { Toast.show('Costo inválido', 'error'); return; }
+    const motivo = document.getElementById('mov-motivo')?.value || '';
+    const p = Store.getProduct(productoId);
+    return confirmAction(`${tipo}: ${cantidad} unidad(es) de ${p?.nombre || 'producto'}. ¿Confirmar movimiento?`, async () => {
+    const res = await Store.addMovement({ productoId, tipo, cantidad, costoUnitario: costo, motivo });
     if (!res.ok) {
       Toast.show(res.error, 'error');
       return;
@@ -705,6 +709,7 @@ const Pages = {
     Modal.close();
     Toast.show('Movimiento registrado' + (tipo === 'Entrada' && costo ? ' · Gasto generado' : ''));
     Router.go('productos');
+    }, {title:'Confirmar movimiento', confirmText:'Registrar', danger: ['Salida','Merma','Ajuste -'].includes(tipo), key:'mov:'+productoId});
   },
 
   // ---------- MOVIMIENTOS ----------
@@ -854,10 +859,11 @@ const Pages = {
       Toast.show('Completa concepto y monto válido', 'error');
       return;
     }
-    await Store.addExpense({ concepto, categoria, monto });
-    Modal.close();
-    Toast.show('Gasto registrado');
-    Router.go('gastos');
+    return confirmAction(`Se registrará el gasto “${concepto}” por ${Utils.formatMoney(monto)}. ¿Confirmar?`, async () => {
+      const r = await Store.addExpense({ concepto, categoria, monto });
+      if (r?.ok === false) return Toast.show(r.error || 'No se pudo registrar el gasto','error');
+      Modal.close(); Toast.show('Gasto registrado'); Router.go('gastos');
+    }, {title:'Confirmar gasto', confirmText:'Registrar gasto', danger:false, key:'gasto'});
   },
 
   // ---------- VENTAS (Nueva venta) ----------
@@ -1020,18 +1026,13 @@ const Pages = {
     document.querySelectorAll('.pay-method').forEach(m => m.classList.remove('selected'));
     el.classList.add('selected');
   },
-  async confirmPago() {
-    const btn=document.getElementById('btn-confirm-pay');
-    if(btn?.disabled)return;
-    const selected = document.querySelector('.pay-method.selected');
-    const method = selected?.getAttribute('data-method') || 'Efectivo';
-    if(btn){btn.disabled=true;btn.textContent='Procesando...';}
+  confirmPago() {
+    const selected=document.querySelector('.pay-method.selected'); const method=selected?.getAttribute('data-method')||'Efectivo'; const total=Store.getCartTotal();
+    confirmAction(`Cobrar ${Utils.formatMoney(total)} mediante ${method}. ¿Confirmar venta?`, async()=>Pages._confirmPagoNow(method), {title:'Confirmar venta',confirmText:'Cobrar',danger:false,key:'venta'});
+  },
+  async _confirmPagoNow(method) {
     const res = await Store.confirmSale(method);
-    if (!res.ok) {
-      if(btn){btn.disabled=false;btn.textContent='Confirmar pago';}
-      Toast.show(res.error, 'error');
-      return;
-    }
+    if (!res.ok) { Toast.show(res.error, 'error'); throw new Error(res.error); }
     Modal.close();
     App.updateCartBadge();
     // Show success
@@ -1249,10 +1250,10 @@ const Pages = {
       <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button id="btn-close-cash" class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button id="btn-open-cash" class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
       <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody>${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
   },
-  async openCash(){const b=document.getElementById('btn-open-cash');if(b?.disabled)return;if(b){b.disabled=true;b.textContent='Abriendo...';}const r=await Store.openCash(Number(document.getElementById('cash-initial').value)||0);if(!r.ok&&b){b.disabled=false;b.textContent='Abrir caja';}Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
-  async closeCash(){const b=document.getElementById('btn-close-cash');if(b?.disabled)return;if(b){b.disabled=true;b.textContent='Cerrando...';}const r=await Store.closeCash(Number(document.getElementById('cash-real').value)||0);if(!r.ok&&b){b.disabled=false;b.textContent='Cerrar caja del día';}Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok)Router.go('caja')},
+  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
+  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
   reportes(){if(!Auth.requireAdmin())return '';const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),gastos=Store.totalExpenses(),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+s.total);return `<div class="page-header"><h1 class="page-title">📈 Reportes</h1></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
-  async anularVenta(id){const motivo=prompt('Motivo de anulación:');if(!motivo)return;const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok)Router.go('historial')}
+  async anularVenta(id){const motivo=prompt('Motivo de anulación:')?.trim();if(!motivo)return;confirmAction('La venta será anulada y el stock será devuelto. Esta acción no debe repetirse. ¿Confirmar?',async()=>{const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('historial')}},{title:'Anular venta',confirmText:'Anular venta',danger:true,key:'cancel-sale:'+id})}
 ,
   configuracion() {
     if (!Auth.requireAdmin()) return '';

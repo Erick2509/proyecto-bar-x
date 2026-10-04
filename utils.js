@@ -69,22 +69,43 @@ const Modal = {
   }
 };
 
-function confirmAction(message, onConfirm) {
+const ActionGuard = {
+  locks: new Set(),
+  async run(key, fn) {
+    if (this.locks.has(key)) return { skipped:true };
+    this.locks.add(key);
+    try { return await fn(); } finally { this.locks.delete(key); }
+  }
+};
+
+function confirmAction(message, onConfirm, options = {}) {
+  const confirmText = options.confirmText || 'Confirmar';
+  const danger = options.danger !== false;
+  const key = options.key || ('confirm:' + message);
   Modal.open(`
     <div class="modal-header">
-      <h2>Confirmar</h2>
+      <h2>${Utils.escapeHtml(options.title || 'Confirmar acción')}</h2>
       <button class="btn-icon" onclick="Modal.close()">✕</button>
     </div>
     <div class="modal-body">
       <p style="color:var(--text-secondary);line-height:1.5">${Utils.escapeHtml(message)}</p>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button>
-      <button class="btn btn-danger" id="confirm-yes">Eliminar</button>
+      <button class="btn btn-secondary" id="confirm-no" onclick="Modal.close()">Cancelar</button>
+      <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-yes">${Utils.escapeHtml(confirmText)}</button>
     </div>
   `);
-  document.getElementById('confirm-yes').onclick = () => {
-    Modal.close();
-    onConfirm();
+  const yes = document.getElementById('confirm-yes');
+  yes.onclick = async () => {
+    if (yes.disabled || ActionGuard.locks.has(key)) return;
+    const no = document.getElementById('confirm-no');
+    yes.disabled = true; if(no) no.disabled = true;
+    const old = yes.textContent; yes.textContent = 'Procesando…';
+    try {
+      await ActionGuard.run(key, async () => { await onConfirm(); });
+    } catch (e) {
+      console.error(e); Toast.show(e?.message || 'No se pudo completar la acción', 'error');
+      if (document.getElementById('confirm-yes') === yes) { yes.disabled=false; if(no) no.disabled=false; yes.textContent=old; }
+    }
   };
 }

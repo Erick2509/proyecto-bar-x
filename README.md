@@ -59,3 +59,10 @@ Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 7
 - Las reglas impiden reabrir/sobrescribir una caja existente y solo permiten Abierta → Cerrada.
 - La auditoría no hace fallar una apertura que ya se realizó correctamente.
 - Caché PWA actualizado a proyecto-x-v15.
+
+## v16 - Protección de acciones
+- Confirmaciones para venta, stock, movimientos, gastos y caja.
+- Acciones destructivas mantienen confirmación explícita.
+- Bloqueo anti doble clic/toque en operaciones de escritura.
+- Capa adicional de bloqueo en Store para evitar escrituras duplicadas concurrentes.
+- Validación de cantidades, costos, montos de caja y gastos antes de confirmar.

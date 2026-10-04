@@ -34,6 +34,7 @@ const Router = {
     const main = document.getElementById('main-content');
     main.innerHTML = renderer();
     this.makeTablesMobileFriendly(main);
+    if (typeof Pages !== 'undefined' && Pages.initPagination) Pages.initPagination(page);
     this.updateNav();
     // Close mobile sidebar
     document.getElementById('sidebar')?.classList.remove('open');

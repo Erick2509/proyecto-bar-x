@@ -1,5 +1,27 @@
 /* ===== ALL PAGES / VIEWS ===== */
 const Pages = {
+  _pageSize: 10,
+  _pages: {},
+  _paginateRows(key, tbodyId, page = 1) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll(':scope > tr')).filter(r => !r.classList.contains('mobile-empty-row'));
+    const size = this._pageSize;
+    const totalPages = Math.max(1, Math.ceil(rows.length / size));
+    page = Math.min(Math.max(1, Number(page)||1), totalPages);
+    this._pages[key] = page;
+    rows.forEach((r,i) => r.style.display = (i >= (page-1)*size && i < page*size) ? '' : 'none');
+    let nav = document.getElementById('pager-'+key);
+    if (!nav) {
+      nav = document.createElement('div'); nav.id='pager-'+key; nav.className='pagination-bar';
+      (tbody.closest('.table-wrap') || tbody.closest('.table-responsive') || tbody.parentElement).after(nav);
+    }
+    nav.innerHTML = rows.length > size ? `<button class="btn btn-sm btn-secondary" ${page<=1?'disabled':''} onclick="Pages._paginateRows('${key}','${tbodyId}',${page-1})">‹ Anterior</button><span>Página <strong>${page}</strong> de ${totalPages} · ${rows.length} registros</span><button class="btn btn-sm btn-secondary" ${page>=totalPages?'disabled':''} onclick="Pages._paginateRows('${key}','${tbodyId}',${page+1})">Siguiente ›</button>` : (rows.length ? `<span>${rows.length} registro(s)</span>` : '');
+  },
+  initPagination(route) {
+    const map={productos:['productos','prod-tbody'],historial:['historial','hist-tbody'],movimientos:['movimientos','mov-tbody'],gastos:['gastos','gasto-tbody'],empleados:['empleados','emp-tbody'],caja:['caja','cash-tbody']};
+    const x=map[route]; if(x) this._paginateRows(x[0],x[1],1);
+  },
   // ---------- DASHBOARD ADMIN ----------
   dashboardAdmin() {
     const salesToday = Store.salesToday();
@@ -200,10 +222,10 @@ const Pages = {
   },
   filterEmpleados() {
     const q = (document.getElementById('emp-search')?.value || '').toLowerCase();
-    document.querySelectorAll('#emp-tbody tr, #emp-cards .card').forEach(el => {
-      const s = el.getAttribute('data-search') || '';
-      el.style.display = s.includes(q) ? '' : 'none';
-    });
+    const users = Store.state.users.filter(u => (`${u.nombres||''} ${u.apellidos||''} ${u.email||''}`).toLowerCase().includes(q));
+    const tbody=document.getElementById('emp-tbody'), cards=document.getElementById('emp-cards');
+    if(tbody){tbody.innerHTML=this._empRows(users); App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document); this._paginateRows('empleados','emp-tbody',1);}
+    if(cards) cards.innerHTML=this._empCards(users);
   },
   openEmpleadoForm(id) {
     const u = id ? Store.getUser(id) : null;
@@ -481,7 +503,7 @@ const Pages = {
       `)).join('') || Components.empty('📦', 'Sin resultados');
     }
     // El filtro reconstruye las filas; volver a aplicar data-label para las tarjetas responsive.
-    if (tbody) App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
+    if (tbody) { App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document); this._paginateRows('productos','prod-tbody',1); }
   },
   openProductoForm(id) {
     const p = id ? Store.getProduct(id) : null;
@@ -727,7 +749,7 @@ const Pages = {
           <thead>
             <tr><th>Fecha</th><th>Hora</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Stock ant.</th><th>Stock nuevo</th><th>Usuario</th></tr>
           </thead>
-          <tbody>
+          <tbody id="mov-tbody">
             ${movs.length === 0 ? `<tr><td colspan="8">${Components.empty('📋', 'No hay movimientos')}</td></tr>` :
               movs.map(m => {
                 const p = Store.getProduct(m.productoId);
@@ -813,12 +835,9 @@ const Pages = {
   filterGastos() {
     const q = (document.getElementById('gasto-search')?.value || '').toLowerCase();
     const cat = document.getElementById('gasto-cat-filter')?.value || '';
-    document.querySelectorAll('#gasto-tbody tr').forEach(tr => {
-      const concept = tr.getAttribute('data-concept') || '';
-      const c = tr.getAttribute('data-cat') || '';
-      const match = (!q || concept.includes(q)) && (!cat || c === cat);
-      tr.style.display = match ? '' : 'none';
-    });
+    const list=[...Store.state.expenses].sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`)).filter(e=>(!q||String(e.concepto||'').toLowerCase().includes(q))&&(!cat||e.categoria===cat));
+    const tbody=document.getElementById('gasto-tbody');
+    if(tbody){tbody.innerHTML=this._gastoRows(list); App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document); this._paginateRows('gastos','gasto-tbody',1);}
   },
   openGastoForm() {
     Modal.open(`
@@ -1109,14 +1128,14 @@ const Pages = {
         return `${p?.nombre || '?'} ×${i.cantidad}`;
       }).join(', ');
       return `<tr data-method="${Utils.escapeHtml(String(s.metodoPago || ''))}" data-date="${s.fecha}" data-total="${Number(s.total || 0)}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
-        <td>${Utils.formatDate(s.fecha)}</td>
-        <td>${String(s.hora||'—').slice(0,5)}</td>
-        <td>${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td>
-        <td style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td>
-        <td>${Utils.escapeHtml(s.metodoPago||'—')}</td>
-        <td>${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td>
-        <td><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">Ver</button> ${Auth.isAdmin() && s.estado !== 'Anulada' ? `<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>` : ''}</td>
+        <td data-label="Fecha">${Utils.formatDate(s.fecha)}</td>
+        <td data-label="Hora">${String(s.hora||'—').slice(0,5)}</td>
+        <td data-label="Empleado">${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
+        <td data-label="Productos" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td>
+        <td data-label="Total" style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td>
+        <td data-label="Método">${Utils.escapeHtml(s.metodoPago||'—')}</td>
+        <td data-label="Estado">${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td>
+        <td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">Ver</button> ${Auth.isAdmin() && s.estado !== 'Anulada' ? `<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>` : ''}</td>
       </tr>`;
     }).join('');
   },
@@ -1144,7 +1163,7 @@ const Pages = {
     if (tbody) {
       tbody.innerHTML = this._histRows(sales);
       App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || tbody.closest('.table-responsive') || document);
-      Router.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document);
+      this._paginateRows('historial','hist-tbody',1);
     }
     const total = sales.filter(s=>s.estado!=='Anulada').reduce((sum, s) => sum + Number(s.total || 0), 0);
     const totalEl = document.getElementById('hist-total'), countEl = document.getElementById('hist-count');
@@ -1251,7 +1270,7 @@ const Pages = {
         <div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Ventas del día</div></div>
       </div>
       <div class="row g-3"><div class="col-12 col-lg-5"><div class="card p-3"><h5>${abierta?'Cerrar caja':'Abrir caja'}</h5>${abierta?`<p>Total vendido hoy: <strong>${Utils.formatMoney(totalDia)}</strong></p><p>Efectivo esperado (inicial + ventas en efectivo): <strong>${Utils.formatMoney(esperado)}</strong></p><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control mb-2" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><button id="btn-close-cash" class="btn btn-primary" onclick="Pages.closeCash()">Cerrar caja del día</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control mb-2" type="number" min="0" step="0.01" value="0"><button id="btn-open-cash" class="btn btn-primary" onclick="Pages.openCash()">Abrir caja</button>`}</div></div>
-      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody>${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
+      <div class="col-12 col-lg-7"><div class="card p-3"><h5>Historial de cierres</h5><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td>${c.fecha} ${c.hora?.slice(0,5)||''}</td><td>${Utils.escapeHtml(c.usuarioNombre||'')}</td><td>${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td>${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td>${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td>${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td>${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td>${c.estado}</td><td>${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div></div>`;
   },
   openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},

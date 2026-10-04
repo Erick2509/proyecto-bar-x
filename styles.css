@@ -1236,3 +1236,9 @@ select option { background:#1c1a16; color:#f7f3ed; }
     font-weight: 800 !important;
   }
 }
+
+
+/* ===== v21: paginación y etiquetas dinámicas ===== */
+.pagination-bar{display:flex;align-items:center;justify-content:center;gap:.75rem;flex-wrap:wrap;padding:1rem .5rem;color:var(--text-secondary);font-size:.9rem}
+.pagination-bar .btn:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:640px){.pagination-bar{justify-content:space-between;gap:.45rem}.pagination-bar span{width:100%;text-align:center;order:-1}.pagination-bar .btn{flex:1}}

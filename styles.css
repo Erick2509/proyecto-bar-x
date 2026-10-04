@@ -1176,3 +1176,49 @@ select option { background:#1c1a16; color:#f7f3ed; }
   .responsive-data-table tbody td { grid-template-columns:minmax(82px,36%) minmax(0,1fr) !important; gap:.55rem !important; }
   .stat-card .stat-value { font-size:1.5rem; }
 }
+
+/* ===== v18: contraste móvil global ===== */
+@media (max-width: 1024px) {
+  /* Etiquetas generadas de las tablas convertidas en tarjetas */
+  .responsive-data-table tbody td::before,
+  .responsive-data-table tbody td[data-label]::before {
+    color: #e2d8ca !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    text-shadow: none !important;
+    font-weight: 800 !important;
+  }
+  .responsive-data-table tbody td,
+  .responsive-data-table tbody td > span,
+  .responsive-data-table tbody td > strong,
+  .responsive-data-table tbody td .text-muted {
+    color: #fffaf2 !important;
+    opacity: 1 !important;
+  }
+  /* Filtros y formularios oscuros: texto siempre legible */
+  .filters-bar label, .filter-group label, .form-group label,
+  .form-label, label, .text-muted, .small-muted {
+    color: #d8cdbf !important;
+    opacity: 1 !important;
+  }
+  .filter-select, .filters-bar select, .filters-bar input,
+  input.form-control, select.form-control, textarea.form-control,
+  input, select, textarea {
+    color: #fffaf2 !important;
+    background-color: #1c1a16 !important;
+    border-color: #484238 !important;
+    -webkit-text-fill-color: #fffaf2 !important;
+    opacity: 1 !important;
+  }
+  select option { color:#fffaf2 !important; background:#1c1a16 !important; }
+  input::placeholder, textarea::placeholder {
+    color:#b9ad9d !important;
+    -webkit-text-fill-color:#b9ad9d !important;
+    opacity:1 !important;
+  }
+  /* Texto de tarjetas y paneles */
+  .card, .product-card, .modal-content, .detail-row,
+  .alert-item, .stat-card { color:#fffaf2 !important; }
+  .card p, .product-card p, .detail-row .dr-label,
+  .ss-meta, .ai-stock { color:#d8cdbf !important; opacity:1 !important; }
+}

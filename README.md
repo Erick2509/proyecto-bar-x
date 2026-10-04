@@ -68,5 +68,5 @@ Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 7
 - Validación de cantidades, costos, montos de caja y gastos antes de confirmar.
 
 
-## v19
+## v20
 Corrige etiquetas invisibles en tarjetas responsive después de aplicar filtros dinámicos en Productos e Historial de ventas. Tras reconstruir filas se vuelven a generar los atributos data-label.

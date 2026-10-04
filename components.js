@@ -18,14 +18,14 @@ const Components = {
     const cat = Store.getCategory(p.categoriaId);
     return `
       <tr>
-        <td><span class="product-img-placeholder">${p.imagen || '📦'}</span></td>
-        <td><strong>${Utils.escapeHtml(p.nombre)}</strong></td>
-        <td>${Utils.escapeHtml(cat?.nombre || '—')}</td>
-        <td style="color:var(--amber)">${Utils.formatMoney(p.precioVenta)}</td>
-        <td>${p.stock}</td>
-        <td>${this.stockStatusBadge(p)}</td>
-        <td>${p.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</td>
-        <td class="table-actions">${actionsHtml}</td>
+        <td data-label="Imagen"><span class="product-img-placeholder">${p.imagen || '📦'}</span></td>
+        <td data-label="Producto"><strong>${Utils.escapeHtml(p.nombre)}</strong></td>
+        <td data-label="Categoría">${Utils.escapeHtml(cat?.nombre || '—')}</td>
+        <td data-label="Precio" style="color:var(--amber)">${Utils.formatMoney(p.precioVenta)}</td>
+        <td data-label="Stock">${p.stock}</td>
+        <td data-label="Estado stock">${this.stockStatusBadge(p)}</td>
+        <td data-label="Estado">${p.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</td>
+        <td class="table-actions" data-label="Acciones">${actionsHtml}</td>
       </tr>
     `;
   },

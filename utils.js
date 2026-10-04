@@ -102,7 +102,11 @@ function confirmAction(message, onConfirm, options = {}) {
     yes.disabled = true; if(no) no.disabled = true;
     const old = yes.textContent; yes.textContent = 'Procesando…';
     try {
-      await ActionGuard.run(key, async () => { await onConfirm(); });
+      const result = await ActionGuard.run(key, async () => await onConfirm());
+      // Si la operación fue rechazada de forma controlada, el modal debe poder reintentarse/cancelarse.
+      if (result?.ok === false || result?.skipped) {
+        if (document.getElementById('confirm-yes') === yes) { yes.disabled=false; if(no) no.disabled=false; yes.textContent=old; }
+      }
     } catch (e) {
       console.error(e); Toast.show(e?.message || 'No se pudo completar la acción', 'error');
       if (document.getElementById('confirm-yes') === yes) { yes.disabled=false; if(no) no.disabled=false; yes.textContent=old; }

@@ -51,15 +51,51 @@ const Store = (() => {
   async function confirmSale(metodoPago){if(!state.cart.length)return{ok:false,error:'Carrito vacío'};if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};const hoy=today();const caja=state.cashSessions.find(x=>x.usuarioId===state.currentUser.id&&x.estado==='Abierta'&&x.fecha===hoy);if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};const saleRef=db.collection('sales').doc();try{await db.runTransaction(async tx=>{const snaps=[];for(const i of state.cart)snaps.push([i,await tx.get(db.collection('products').doc(i.productoId))]);const items=[];let total=0,costo=0;for(const [i,s] of snaps){if(!s.exists||s.data().stock<i.cantidad)throw Error(`Stock insuficiente para ${s.data()?.nombre||'producto'}`);const p=s.data(),sub=p.precioVenta*i.cantidad;items.push({productoId:s.id,nombre:p.nombre,cantidad:i.cantidad,precioUnitario:p.precioVenta,costoUnitario:p.precioCompra,subtotal:sub});total+=sub;costo+=p.precioCompra*i.cantidad;tx.update(s.ref,{stock:p.stock-i.cantidad});const t=limaParts();tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:p.nombre,tipo:'Venta',cantidad:i.cantidad,stockAnterior:p.stock,stockNuevo:p.stock-i.cantidad,usuarioId:state.currentUser.id,motivo:`Venta ${saleRef.id}`});}const t=limaParts();tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:state.currentUser.id,empleadoNombre:`${state.currentUser.nombres} ${state.currentUser.apellidos}`,cajaId:caja.id,items,total:+total.toFixed(2),costoTotal:+costo.toFixed(2),metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});});state.cart=[];await audit('VENTA',saleRef.id);return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}}}catch(e){return{ok:false,error:e.message}}}
   async function cancelSale(id,motivo='Sin motivo'){
     motivo=String(motivo||'').trim(); if(!motivo)return{ok:false,error:'Debes indicar el motivo de anulación'};
-    const sr=db.collection('sales').doc(id);
-    try{await db.runTransaction(async tx=>{
-      const s=await tx.get(sr);if(!s.exists)throw Error('Venta no encontrada');const sale=s.data();
-      if(sale.estado==='Anulada')throw Error('La venta ya está anulada');
-      if(sale.cajaId){const cs=await tx.get(db.collection('cashSessions').doc(sale.cajaId));if(cs.exists&&cs.data().estado==='Cerrada')throw Error('No se puede anular una venta de una caja ya cerrada');}
-      for(const i of (sale.items||[])){const pr=db.collection('products').doc(i.productoId),p=await tx.get(pr);if(p.exists){const old=Number(p.data().stock||0),qty=Number(i.cantidad||0);tx.update(pr,{stock:old+qty});const t=limaParts();tx.set(db.collection('movements').doc(),{...t,productoId:i.productoId,productoNombre:i.nombre,tipo:'Devolución',cantidad:qty,stockAnterior:old,stockNuevo:old+qty,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});}}
-      tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id});
-    });await audit('ANULAR_VENTA',`${id}: ${motivo}`);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
-  async function addExpense(data){const t=limaParts(),exp={...t,concepto:data.concepto.trim(),categoria:data.categoria,monto:Number(data.monto),origen:'Manual',usuarioId:state.currentUser.id};const r=await db.collection('expenses').add(exp);await audit('GASTO',`${exp.concepto} S/${exp.monto}`);return{ok:true,expense:{id:r.id,...exp}}}
+    if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede anular ventas'};
+    try{
+      const sr=db.collection('sales').doc(id);
+      await db.runTransaction(async tx=>{
+        // Firestore exige hacer TODAS las lecturas antes de la primera escritura.
+        const ss=await tx.get(sr); if(!ss.exists)throw Error('Venta no encontrada');
+        const sale=ss.data(); if(sale.estado==='Anulada')throw Error('La venta ya está anulada');
+        if(sale.estado!=='Completada')throw Error('La venta no se encuentra en un estado que pueda anularse');
+
+        let cashSnap=null;
+        if(sale.cajaId){
+          cashSnap=await tx.get(db.collection('cashSessions').doc(sale.cajaId));
+          if(cashSnap.exists&&cashSnap.data().estado==='Cerrada')throw Error('No se puede anular una venta de una caja ya cerrada');
+        }
+
+        const items=Array.isArray(sale.items)?sale.items:[];
+        if(!items.length)throw Error('La venta no contiene productos para devolver');
+        const productReads=[];
+        for(const i of items){
+          if(!i.productoId)throw Error('La venta contiene un producto inválido');
+          const ref=db.collection('products').doc(i.productoId);
+          const snap=await tx.get(ref);
+          if(!snap.exists)throw Error(`Producto no encontrado: ${i.nombre||i.productoId}`);
+          const qty=Number(i.cantidad||0);
+          if(!Number.isFinite(qty)||qty<=0)throw Error(`Cantidad inválida en ${i.nombre||'producto'}`);
+          productReads.push({item:i,ref,snap,qty});
+        }
+
+        // Solo después de terminar todas las lecturas se realizan las escrituras.
+        const t=limaParts();
+        for(const x of productReads){
+          const old=Number(x.snap.data().stock||0), neu=old+x.qty;
+          tx.update(x.ref,{stock:neu});
+          tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
+        }
+        tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});
+      });
+      await audit('ANULAR_VENTA',`${id}: ${motivo}`);
+      return{ok:true};
+    }catch(e){
+      console.error('Error anulando venta:',e);
+      return{ok:false,error:e?.code==='permission-denied'?'Firestore rechazó la anulación. Verifica que las reglas de esta versión estén publicadas.':(e.message||'No se pudo anular la venta')};
+    }
+  }
+
   function today(){return limaParts().fecha} function salesToday(){return state.sales.filter(s=>s.fecha===today()&&s.estado!=='Anulada')} function expensesToday(){return state.expenses.filter(e=>e.fecha===today())} function totalSales(fn){return (fn?state.sales.filter(fn):state.sales).filter(s=>s.estado!=='Anulada').reduce((a,b)=>a+Number(b.total||0),0)} function totalExpenses(fn){return(fn?state.expenses.filter(fn):state.expenses).reduce((a,b)=>a+Number(b.monto||0),0)}
   async function openCash(initial){
     initial=Number(initial);

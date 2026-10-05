@@ -73,3 +73,7 @@ Corrige etiquetas invisibles en tarjetas responsive después de aplicar filtros 
 
 ## v22
 Etiquetas responsive incorporadas directamente en filas de Gastos, Movimientos, Empleados e Historial de Caja, para conservarlas tras filtros, actualizaciones y paginación. Mantiene las correcciones directas de Productos e Historial de ventas.
+
+## v25
+- Anulación corregida incluso para ventas de cajas cerradas; ajusta el resumen de caja y devuelve stock.
+- Modales de confirmación con fondo estático: no se cierran al tocar/clicar fuera; solo Cancelar o X.

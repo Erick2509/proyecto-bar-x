@@ -55,36 +55,51 @@ const Store = (() => {
     try{
       const sr=db.collection('sales').doc(id);
       await db.runTransaction(async tx=>{
-        // Firestore exige hacer TODAS las lecturas antes de la primera escritura.
+        // 1) TODAS las lecturas primero.
         const ss=await tx.get(sr); if(!ss.exists)throw Error('Venta no encontrada');
         const sale=ss.data(); if(sale.estado==='Anulada')throw Error('La venta ya está anulada');
         if(sale.estado!=='Completada')throw Error('La venta no se encuentra en un estado que pueda anularse');
 
-        let cashSnap=null;
-        if(sale.cajaId){
-          cashSnap=await tx.get(db.collection('cashSessions').doc(sale.cajaId));
-          if(cashSnap.exists&&cashSnap.data().estado==='Cerrada')throw Error('No se puede anular una venta de una caja ya cerrada');
-        }
+        let cashRef=null,cashSnap=null;
+        if(sale.cajaId){ cashRef=db.collection('cashSessions').doc(sale.cajaId); cashSnap=await tx.get(cashRef); }
 
         const items=Array.isArray(sale.items)?sale.items:[];
         if(!items.length)throw Error('La venta no contiene productos para devolver');
         const productReads=[];
         for(const i of items){
           if(!i.productoId)throw Error('La venta contiene un producto inválido');
-          const ref=db.collection('products').doc(i.productoId);
-          const snap=await tx.get(ref);
+          const ref=db.collection('products').doc(i.productoId), snap=await tx.get(ref);
           if(!snap.exists)throw Error(`Producto no encontrado: ${i.nombre||i.productoId}`);
-          const qty=Number(i.cantidad||0);
-          if(!Number.isFinite(qty)||qty<=0)throw Error(`Cantidad inválida en ${i.nombre||'producto'}`);
+          const qty=Number(i.cantidad||0); if(!Number.isFinite(qty)||qty<=0)throw Error(`Cantidad inválida en ${i.nombre||'producto'}`);
           productReads.push({item:i,ref,snap,qty});
         }
 
-        // Solo después de terminar todas las lecturas se realizan las escrituras.
+        // 2) Escrituras después de terminar las lecturas.
         const t=limaParts();
         for(const x of productReads){
-          const old=Number(x.snap.data().stock||0), neu=old+x.qty;
+          const old=Number(x.snap.data().stock||0),neu=old+x.qty;
           tx.update(x.ref,{stock:neu});
           tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
+        }
+
+        // Si la caja ya fue cerrada, mantener su resumen contable consistente.
+        if(cashSnap?.exists && cashSnap.data().estado==='Cerrada'){
+          const c=cashSnap.data(), total=Number(sale.total||0), metodo=sale.metodoPago;
+          const patch={
+            totalVentasDia:+Math.max(0,Number(c.totalVentasDia||0)-total).toFixed(2),
+            cantidadVentasDia:Math.max(0,Number(c.cantidadVentasDia||0)-1),
+            ajustePorAnulacion:true,
+            ultimaAnulacionId:id,
+            ultimaAnulacionFecha:t.fecha,
+            ultimaAnulacionHora:t.hora
+          };
+          const field={Efectivo:'efectivoVentas',Yape:'yapeVentas',Plin:'plinVentas',Tarjeta:'tarjetaVentas'}[metodo];
+          if(field) patch[field]=+Math.max(0,Number(c[field]||0)-total).toFixed(2);
+          if(metodo==='Efectivo'){
+            patch.esperado=+Math.max(0,Number(c.esperado||0)-total).toFixed(2);
+            patch.diferencia=+(Number(c.real||0)-patch.esperado).toFixed(2);
+          }
+          tx.update(cashRef,patch);
         }
         tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});
       });
@@ -92,7 +107,31 @@ const Store = (() => {
       return{ok:true};
     }catch(e){
       console.error('Error anulando venta:',e);
-      return{ok:false,error:e?.code==='permission-denied'?'Firestore rechazó la anulación. Verifica que las reglas de esta versión estén publicadas.':(e.message||'No se pudo anular la venta')};
+      return{ok:false,error:e?.code==='permission-denied'?'Firestore rechazó la anulación. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo anular la venta')};
+    }
+  }
+
+  async function addExpense(data){
+    const concepto=String(data?.concepto||'').trim();
+    const categoria=String(data?.categoria||'Otros').trim();
+    const monto=Number(data?.monto);
+    const u=state.currentUser;
+    if(!u)return{ok:false,error:'Sesión no válida'};
+    if(u.role!=='admin')return{ok:false,error:'Solo el administrador puede registrar gastos manuales'};
+    if(!concepto)return{ok:false,error:'Ingresa el concepto del gasto'};
+    if(!Number.isFinite(monto)||monto<=0)return{ok:false,error:'Ingresa un monto válido mayor a S/ 0.00'};
+    const permitidas=['Alquiler','Servicios','Personal','Mantenimiento','Otros'];
+    if(!permitidas.includes(categoria))return{ok:false,error:'Selecciona una categoría válida'};
+    const t=limaParts();
+    const payload={...t,concepto,categoria,monto:+monto.toFixed(2),origen:'Manual',usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    try{
+      const ref=await db.collection('expenses').add(payload);
+      if(!state.expenses.some(e=>e.id===ref.id))state.expenses.push({id:ref.id,...payload});
+      try{await audit('REGISTRAR_GASTO',`${concepto} · S/${monto.toFixed(2)}`)}catch(err){console.warn('Auditoría gasto:',err)}
+      return{ok:true,id:ref.id};
+    }catch(e){
+      console.error('Error registrando gasto:',e);
+      return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió registrar el gasto. Verifica que ingresaste como administrador y que las reglas estén publicadas.':(e.message||'No se pudo registrar el gasto')};
     }
   }
 

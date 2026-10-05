@@ -53,14 +53,14 @@ const Toast = {
 };
 
 const Modal = {
-  open(html) {
+  open(html, options = {}) {
     const overlay = document.getElementById('modal-overlay');
     const modal = document.getElementById('modal');
     modal.innerHTML = html;
     overlay.classList.remove('hidden');
-    // close on backdrop click
+    // Los modales de confirmación pueden usar fondo estático.
     overlay.onclick = (e) => {
-      if (e.target === overlay) this.close();
+      if (e.target === overlay && !options.staticBackdrop) this.close();
     };
   },
   close() {
@@ -94,7 +94,7 @@ function confirmAction(message, onConfirm, options = {}) {
       <button class="btn btn-secondary" id="confirm-no" onclick="Modal.close()">Cancelar</button>
       <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-yes">${Utils.escapeHtml(confirmText)}</button>
     </div>
-  `);
+  `, { staticBackdrop: true });
   const yes = document.getElementById('confirm-yes');
   yes.onclick = async () => {
     if (yes.disabled || ActionGuard.locks.has(key)) return;

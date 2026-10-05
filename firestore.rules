@@ -70,11 +70,21 @@ service cloud.firestore {
         && positiveNumber(request.resource.data.montoInicial);
       // Nadie puede reutilizar una caja existente para volver a "abrirla".
       // Admin y propietario solo pueden realizar la transición Abierta -> Cerrada.
-      allow update: if (admin() || (active() && resource.data.usuarioId == request.auth.uid))
-        && request.resource.data.usuarioId == resource.data.usuarioId
-        && resource.data.estado == 'Abierta'
-        && request.resource.data.estado == 'Cerrada'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']);
+      allow update: if (
+        // Cierre normal: propietario o admin, Abierta -> Cerrada.
+        ((admin() || (active() && resource.data.usuarioId == request.auth.uid))
+          && request.resource.data.usuarioId == resource.data.usuarioId
+          && resource.data.estado == 'Abierta'
+          && request.resource.data.estado == 'Cerrada'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']))
+        ||
+        // Ajuste de una caja cerrada únicamente por Admin al anular una venta.
+        (admin()
+          && resource.data.estado == 'Cerrada'
+          && request.resource.data.estado == 'Cerrada'
+          && request.resource.data.usuarioId == resource.data.usuarioId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','diferencia','ajustePorAnulacion','ultimaAnulacionId','ultimaAnulacionFecha','ultimaAnulacionHora']))
+      );
       allow delete: if false;
     }
     match /audits/{id} {

@@ -527,6 +527,95 @@ const Pages = {
     // El filtro reconstruye las filas; volver a aplicar data-label para las tarjetas responsive.
     if (tbody) { App.makeTablesMobileFriendly(tbody.closest('.table-wrap') || document); this._paginateRows('productos','prod-tbody',1); }
   },
+  _productIconGroups() {
+    return [
+      { id:'cervezas', nombre:'Cervezas y bar', keywords:'cerveza chela bar botella alcohol trago copa', icons:'🍺 🍻 🥂 🍷 🥃 🍸 🍹 🍾 🧉 🍶 🫗 🧊 🪣'.split(' ') },
+      { id:'bebidas', nombre:'Bebidas', keywords:'bebida gaseosa soda refresco agua jugo cafe te vaso botella lata', icons:'🥤 🧃 🧋 ☕ 🍵 🫖 🥛 🍼 🧴 🚰 💧 🫧 🥥 🍋 🍊'.split(' ') },
+      { id:'frutas', nombre:'Frutas y sabores', keywords:'fruta limon naranja fresa uva pina coco sandia cereza manzana sabor', icons:'🍋 🍊 🍓 🍇 🍍 🥥 🍉 🍒 🍎 🍏 🍑 🥭 🫐 🍌 🥝 🍈 🍐'.split(' ') },
+      { id:'comidas', nombre:'Comidas', keywords:'comida hamburguesa pizza pollo carne hotdog sandwich taco parrilla', icons:'🍔 🍟 🌭 🍕 🥪 🌮 🌯 🥙 🍗 🍖 🥩 🍤 🍣 🍱 🍜 🍝 🍛 🥘 🥗'.split(' ') },
+      { id:'piqueos', nombre:'Piqueos y snacks', keywords:'piqueo snack canchita mani papas queso galleta dulce chocolate', icons:'🍿 🥜 🫘 🫒 🧀 🥨 🍪 🍫 🍬 🍭 🧁 🍰 🍩 🥠 🥟 🍘 🍙'.split(' ') },
+      { id:'desayuno', nombre:'Pan y desayuno', keywords:'pan desayuno huevo tostada croissant sandwich', icons:'🥐 🥖 🍞 🥯 🥞 🧇 🍳 🥚 🥓 🥪 🧈 🍯'.split(' ') },
+      { id:'helados', nombre:'Helados y postres', keywords:'helado postre dulce torta pastel', icons:'🍦 🍧 🍨 🍮 🍰 🎂 🧁 🍩 🍪 🍫 🍬 🍡'.split(' ') },
+      { id:'combos', nombre:'Combos y promociones', keywords:'combo promocion oferta descuento especial nuevo estrella fuego regalo', icons:'🔥 ⭐ 🌟 ✨ 💥 🎉 🎊 🎁 🏷️ 💰 💵 💸 🪙 ✅ 💯 🆕 ❤️'.split(' ') },
+      { id:'musica', nombre:'Bar y entretenimiento', keywords:'musica fiesta karaoke billar dardos noche baile', icons:'🎵 🎶 🎤 🎧 🎸 🪩 🎉 🎯 🎱 🎲 🃏 🎮 📺 🌙'.split(' ') },
+      { id:'envases', nombre:'Envases y servicio', keywords:'vaso copa plato cubiertos bolsa caja delivery envase', icons:'🥄 🍴 🍽️ 🥢 🥡 🥣 🫙 🧂 🧃 🥤 🛍️ 📦 🥫 🧺'.split(' ') },
+      { id:'tienda', nombre:'Tienda y varios', keywords:'tienda varios paquete caja producto higiene', icons:'📦 🛒 🛍️ 🧻 🧼 🧽 🪥 🧴 🔋 💡 🕯️ 🧯 🧰 🧹'.split(' ') },
+      { id:'numeros', nombre:'Números y packs', keywords:'pack unidad unidades uno dos tres cuatro cinco seis caja docena', icons:'1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟 #️⃣ *️⃣'.split(' ') },
+      { id:'formas', nombre:'Colores y símbolos', keywords:'color circulo cuadrado rojo azul verde amarillo negro blanco simbolo', icons:'🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟤 🟥 🟧 🟨 🟩 🟦 🟪 ⬛ ⬜ ❤️ 💚 💙 💜 🧡'.split(' ') },
+      { id:'otros', nombre:'Otros', keywords:'otro favorito premium rapido importante disponible', icons:'📌 📍 🏆 🥇 👑 💎 🚀 ⚡ ☀️ 🌙 🌈 🎀 🪄 🔔 🔥 ⭐ ✅'.split(' ') }
+    ];
+  },
+  _productIconPicker(selected = '📦') {
+    const groups = this._productIconGroups();
+    const chips = [`<button type="button" class="product-icon-chip active" data-group="todos" onclick="Pages.setProductIconGroup('todos',this)">Todos</button>`, ...groups.map(g => `<button type="button" class="product-icon-chip" data-group="${g.id}" onclick="Pages.setProductIconGroup('${g.id}',this)">${g.nombre}</button>`)].join('');
+    const seenIcons = new Set();
+    const sections = groups.map(g => {
+      const icons = g.icons.filter(icon => { if (seenIcons.has(icon)) return false; seenIcons.add(icon); return true; });
+      return `
+      <section class="product-icon-section" data-icon-section="${g.id}">
+        <div class="product-icon-section-title">${g.nombre}</div>
+        <div class="product-icon-grid">
+          ${icons.map(icon => `<button type="button" class="product-icon-option ${icon===selected?'selected':''}" data-icon="${icon}" data-group="${g.id}" data-search="${g.keywords} ${g.nombre.toLowerCase()}" onclick="Pages.selectProductIcon('${icon}',this)" title="Elegir ${icon}">${icon}</button>`).join('')}
+        </div>
+      </section>`;
+    }).join('');
+    return `
+      <div class="product-icon-picker">
+        <div class="product-icon-current">
+          <div class="product-icon-preview" id="prod-icon-preview">${selected || '📦'}</div>
+          <div><strong>Ícono del producto</strong><small>Presiona un ícono para seleccionarlo. También puedes escribir cualquier emoji.</small></div>
+        </div>
+        <div class="product-icon-custom">
+          <input type="text" id="prod-icon-value" name="imagen" value="${Utils.escapeHtml(selected || '📦')}" oninput="Pages.syncProductIconInput(this.value)" aria-label="Ícono seleccionado" />
+          <input type="search" id="prod-icon-search" placeholder="Buscar: cerveza, comida, promo..." oninput="Pages.filterProductIcons()" />
+        </div>
+        <div class="product-icon-chips">${chips}</div>
+        <div class="product-icon-scroll" id="prod-icon-scroll">${sections}</div>
+        <div class="product-icon-empty hidden" id="prod-icon-empty">No encontré iconos con ese filtro. Puedes escribir tu propio emoji arriba.</div>
+      </div>`;
+  },
+  selectProductIcon(icon, el) {
+    const input = document.getElementById('prod-icon-value');
+    const preview = document.getElementById('prod-icon-preview');
+    if (input) input.value = icon;
+    if (preview) preview.textContent = icon;
+    document.querySelectorAll('.product-icon-option.selected').forEach(x => x.classList.remove('selected'));
+    if (el) el.classList.add('selected');
+  },
+  syncProductIconInput(value) {
+    const icon = String(value || '').trim() || '📦';
+    const preview = document.getElementById('prod-icon-preview');
+    if (preview) preview.textContent = icon;
+    document.querySelectorAll('.product-icon-option.selected').forEach(x => x.classList.remove('selected'));
+    const match = Array.from(document.querySelectorAll('.product-icon-option')).find(x => x.dataset.icon === String(value || '').trim());
+    if (match) match.classList.add('selected');
+  },
+  setProductIconGroup(group, el) {
+    document.querySelectorAll('.product-icon-chip').forEach(x => x.classList.remove('active'));
+    if (el) el.classList.add('active');
+    const picker = document.querySelector('.product-icon-picker');
+    if (picker) picker.dataset.activeGroup = group || 'todos';
+    this.filterProductIcons();
+  },
+  filterProductIcons() {
+    const picker = document.querySelector('.product-icon-picker');
+    if (!picker) return;
+    const q = (document.getElementById('prod-icon-search')?.value || '').trim().toLowerCase();
+    const group = picker.dataset.activeGroup || 'todos';
+    let totalVisible = 0;
+    picker.querySelectorAll('.product-icon-section').forEach(section => {
+      let sectionVisible = 0;
+      section.querySelectorAll('.product-icon-option').forEach(btn => {
+        const matchesGroup = group === 'todos' || btn.dataset.group === group;
+        const matchesText = !q || `${btn.dataset.search || ''} ${btn.dataset.icon || ''}`.toLowerCase().includes(q);
+        const show = matchesGroup && matchesText;
+        btn.hidden = !show;
+        if (show) { sectionVisible++; totalVisible++; }
+      });
+      section.hidden = sectionVisible === 0;
+    });
+    document.getElementById('prod-icon-empty')?.classList.toggle('hidden', totalVisible !== 0);
+  },
   openProductoForm(id) {
     const p = id ? Store.getProduct(id) : null;
     const cats = Store.state.categories.filter(c => c.estado === 'Activo');
@@ -582,18 +671,16 @@ const Pages = {
             <label>5. Descripción (opcional)</label>
             <textarea name="descripcion" rows="2">${Utils.escapeHtml(p?.descripcion || '')}</textarea>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>6. Imagen / ícono (emoji)</label>
-              <input type="text" name="imagen" placeholder="🍺" value="${Utils.escapeHtml(p?.imagen || '📦')}" maxlength="4" />
-            </div>
-            <div class="form-group">
-              <label>Estado</label>
-              <select name="estado">
-                <option value="Activo" ${!p || p.estado === 'Activo' ? 'selected' : ''}>Activo</option>
-                <option value="Inactivo" ${p?.estado === 'Inactivo' ? 'selected' : ''}>Inactivo</option>
-              </select>
-            </div>
+          <div class="form-group">
+            <label>6. Imagen / ícono *</label>
+            ${this._productIconPicker(p?.imagen || '📦')}
+          </div>
+          <div class="form-group">
+            <label>Estado</label>
+            <select name="estado">
+              <option value="Activo" ${!p || p.estado === 'Activo' ? 'selected' : ''}>Activo</option>
+              <option value="Inactivo" ${p?.estado === 'Inactivo' ? 'selected' : ''}>Inactivo</option>
+            </select>
           </div>
           <div id="prod-form-error" class="error-msg hidden"></div>
         </form>

@@ -94,11 +94,18 @@ Etiquetas responsive incorporadas directamente en filas de Gastos, Movimientos, 
 Publica el archivo `firestore.rules` de esta versión antes de probar apertura de caja o ventas. La colección `cashLocks` se crea automáticamente al abrir caja.
 
 
-## v27 - Caja y eliminación real
+## v28 - Caja y eliminación real
 - Rediseño del historial de caja: tema oscuro consistente, mayor espacio para historial, estados y diferencias con badges, fecha/hora legibles y Yape/Plin agrupados.
 - Las cajas abiertas muestran sus ventas actuales en el historial en vez de guiones.
 - Productos y categorías ahora se eliminan de las colecciones activas (`products` / `categories`) en lugar de cambiar a Inactivo.
 - Antes de eliminar una categoría se comprueba que no tenga productos asociados.
 - Se conserva una copia técnica en `deletedProducts` / `deletedCategories` para trazabilidad y para permitir anular ventas históricas sin revivir productos eliminados.
-- Caché PWA actualizado a `proyecto-x-v27`.
+- Caché PWA actualizado a `proyecto-x-v28`.
 - La paginación ahora usa una clase con `display:none!important`, por lo que también funciona en las tarjetas móviles responsive.
+
+
+## v28 - Selector ampliado de iconos
+- Selector visual con más de 180 opciones agrupadas por tipo.
+- Filtros por categoría y búsqueda por palabras como cerveza, comida, promoción, bebida, etc.
+- Compatible con iconos personalizados escritos manualmente.
+- Diseño responsive para celular y escritorio.

@@ -206,7 +206,7 @@ const Pages = {
         <td data-label="Estado">${u.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</td>
         <td class="table-actions" data-label="Acciones">
           <button class="btn btn-sm btn-secondary" onclick="Pages.openEmpleadoForm('${u.id}')">Editar</button>
-          ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="Pages.deleteEmpleado('${u.id}')">Eliminar</button>` : ''}
+          ${u.role !== 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="Pages.resetEmpleadoPassword('${u.id}')">Restablecer clave</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteEmpleado('${u.id}')">Desactivar</button>` : ''}
         </td>
       </tr>
     `).join('');
@@ -220,7 +220,7 @@ const Pages = {
         <div style="margin-bottom:0.6rem">${u.estado === 'Activo' ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-neutral">Inactivo</span>'}</div>
         <div class="table-actions">
           <button class="btn btn-sm btn-secondary" onclick="Pages.openEmpleadoForm('${u.id}')">Editar</button>
-          ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="Pages.deleteEmpleado('${u.id}')">Eliminar</button>` : ''}
+          ${u.role !== 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="Pages.resetEmpleadoPassword('${u.id}')">Restablecer clave</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteEmpleado('${u.id}')">Desactivar</button>` : ''}
         </div>
       </div>
     `).join('');
@@ -263,19 +263,27 @@ const Pages = {
             </div>
           </div>
           <div class="form-group">
-            <label>Correo *</label>
-            <input type="email" name="email" required value="${Utils.escapeHtml(u?.email || '')}" />
+            <label>Correo de acceso *</label>
+            <input type="email" name="email" required ${isEdit ? 'readonly' : ''} value="${Utils.escapeHtml(u?.email || '')}" />
+            ${isEdit ? '<small class="text-muted">El correo de Authentication no se modifica desde este formulario para evitar desincronizar el acceso.</small>' : ''}
           </div>
-          <div class="form-row">
+          ${isEdit ? `
             <div class="form-group">
-              <label>Contraseña ${isEdit ? '(dejar vacío para no cambiar)' : '*'}</label>
-              <input type="password" name="password" ${isEdit ? '' : 'required'} minlength="4" />
+              <label>Contraseña</label>
+              <small class="text-muted">La contraseña se restablece desde el botón “Restablecer clave” en la lista de empleados.</small>
             </div>
-            <div class="form-group">
-              <label>Confirmar contraseña</label>
-              <input type="password" name="password2" ${isEdit ? '' : 'required'} />
+          ` : `
+            <div class="form-row">
+              <div class="form-group">
+                <label>Contraseña *</label>
+                <input type="password" name="password" required minlength="6" autocomplete="new-password" />
+              </div>
+              <div class="form-group">
+                <label>Confirmar contraseña *</label>
+                <input type="password" name="password2" required minlength="6" autocomplete="new-password" />
+              </div>
             </div>
-          </div>
+          `}
           <div class="form-group">
             <label>Estado</label>
             <select name="estado">
@@ -314,8 +322,8 @@ const Pages = {
       errEl.classList.remove('hidden');
       return;
     }
-    if (data.password && data.password.length < 4) {
-      errEl.textContent = 'La contraseña debe tener al menos 4 caracteres';
+    if (data.password && data.password.length < 6) {
+      errEl.textContent = 'La contraseña debe tener al menos 6 caracteres';
       errEl.classList.remove('hidden');
       return;
     }
@@ -335,16 +343,23 @@ const Pages = {
     Toast.show(id ? 'Empleado actualizado' : 'Empleado creado');
     Router.go('empleados');
   },
+  resetEmpleadoPassword(id) {
+    const u = Store.getUser(id);
+    if (!u?.email) return Toast.show('El empleado no tiene un correo válido', 'error');
+    confirmAction(`Se enviará un enlace de restablecimiento a ${u.email}. ¿Continuar?`, async () => {
+      const res = await Store.sendPasswordReset(id);
+      Toast.show(res.ok ? 'Enlace de restablecimiento enviado' : res.error, res.ok ? 'success' : 'error');
+      if (res.ok) Modal.close();
+      return res;
+    }, { title:'Restablecer contraseña', confirmText:'Enviar enlace', danger:false, key:'reset-password:'+id });
+  },
   deleteEmpleado(id) {
     confirmAction('¿Desactivar este empleado?', async () => {
       const res = await Store.deleteUser(id);
-      if (res.ok) {
-        Toast.show('Empleado eliminado');
-        Router.go('empleados');
-      } else {
-        Toast.show(res.error, 'error');
-      }
-    });
+      Toast.show(res.ok ? 'Empleado desactivado' : res.error, res.ok ? 'success' : 'error');
+      if (res.ok) { Modal.close(); Router.go('empleados'); }
+      return res;
+    }, { title:'Desactivar empleado', confirmText:'Desactivar', danger:true, key:'delete-user:'+id });
   },
 
   // ---------- CATEGORÍAS ----------
@@ -420,16 +435,17 @@ const Pages = {
     Router.go('categorias');
   },
   deleteCategoria(id) {
-    const count = Store.state.products.filter(p => p.categoriaId === id).length;
+    const count = Store.state.products.filter(p => p.categoriaId === id && p.estado === 'Activo').length;
     if (count > 0) {
       Toast.show(`No se puede eliminar: tiene ${count} producto(s) asociado(s)`, 'error');
       return;
     }
     confirmAction('¿Desactivar esta categoría?', async () => {
-      await Store.deleteCategory(id);
-      Toast.show('Categoría eliminada');
-      Router.go('categorias');
-    });
+      const res = await Store.deleteCategory(id);
+      Toast.show(res.ok ? 'Categoría desactivada' : res.error, res.ok ? 'success' : 'error');
+      if (res.ok) { Modal.close(); Router.go('categorias'); }
+      return res;
+    }, { title:'Desactivar categoría', confirmText:'Desactivar', danger:true, key:'delete-category:'+id });
   },
 
   // ---------- PRODUCTOS ----------
@@ -649,16 +665,18 @@ const Pages = {
     const p = Store.getProduct(productoId); const total = cantidad * costo;
     return confirmAction(`Se agregarán ${cantidad} unidad(es) a ${p?.nombre || 'este producto'} y se registrará un gasto de ${Utils.formatMoney(total)}. ¿Confirmar?`, async () => {
     const res = await Store.addMovement({ productoId, tipo:'Entrada', cantidad, costoUnitario:costo, motivo });
-    if (!res.ok) return Toast.show(res.error || 'No se pudo agregar stock', 'error');
+    if (!res.ok) { Toast.show(res.error || 'No se pudo agregar stock', 'error'); return res; }
     Modal.close(); Toast.show('Stock agregado y gasto registrado', 'success'); Router.go('productos');
+    return res;
     }, {title:'Confirmar ingreso de stock', confirmText:'Agregar stock', danger:false, key:'add-stock:'+productoId});
   },
   deleteProducto(id) {
     confirmAction('¿Desactivar este producto?', async () => {
-      await Store.deleteProduct(id);
-      Toast.show('Producto eliminado');
-      Router.go('productos');
-    });
+      const res = await Store.deleteProduct(id);
+      Toast.show(res.ok ? 'Producto desactivado' : res.error, res.ok ? 'success' : 'error');
+      if (res.ok) { Modal.close(); Router.go('productos'); }
+      return res;
+    }, { title:'Desactivar producto', confirmText:'Desactivar', danger:true, key:'delete-product:'+id });
   },
 
   // ---------- MOVIMIENTOS DE STOCK ----------
@@ -733,11 +751,12 @@ const Pages = {
     const res = await Store.addMovement({ productoId, tipo, cantidad, costoUnitario: costo, motivo });
     if (!res.ok) {
       Toast.show(res.error, 'error');
-      return;
+      return res;
     }
     Modal.close();
     Toast.show('Movimiento registrado' + (tipo === 'Entrada' && costo ? ' · Gasto generado' : ''));
     Router.go('productos');
+    return res;
     }, {title:'Confirmar movimiento', confirmText:'Registrar', danger: ['Salida','Merma','Ajuste -'].includes(tipo), key:'mov:'+productoId});
   },
 
@@ -887,8 +906,9 @@ const Pages = {
     }
     return confirmAction(`Se registrará el gasto “${concepto}” por ${Utils.formatMoney(monto)}. ¿Confirmar?`, async () => {
       const r = await Store.addExpense({ concepto, categoria, monto });
-      if (r?.ok === false) return Toast.show(r.error || 'No se pudo registrar el gasto','error');
+      if (r?.ok === false) { Toast.show(r.error || 'No se pudo registrar el gasto','error'); return r; }
       Modal.close(); Toast.show('Gasto registrado'); Router.go('gastos');
+      return r;
     }, {title:'Confirmar gasto', confirmText:'Registrar gasto', danger:false, key:'gasto'});
   },
 
@@ -1058,7 +1078,7 @@ const Pages = {
   },
   async _confirmPagoNow(method) {
     const res = await Store.confirmSale(method);
-    if (!res.ok) { Toast.show(res.error, 'error'); throw new Error(res.error); }
+    if (!res.ok) { Toast.show(res.error, 'error'); return res; }
     Modal.close();
     App.updateCartBadge();
     // Show success
@@ -1078,6 +1098,7 @@ const Pages = {
         </div>
       </div>
     `);
+    return res;
   },
 
   // ---------- HISTORIAL VENTAS ----------
@@ -1271,8 +1292,8 @@ const Pages = {
       <div class="ux-cash-layout"><div class="card ux-cash-action"><h3>${abierta?'Cerrar caja':'Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Cuenta solo el dinero físico disponible en caja.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Dinero disponible antes de realizar la primera venta.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
       <div class="card"><div class="ux-section-head"><div><h3>Historial de caja</h3><p>Sesiones anteriores y diferencias</p></div></div><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td data-label="Fecha">${c.fecha} ${c.hora?.slice(0,5)||''}</td><td data-label="Usuario">${Utils.escapeHtml(c.usuarioNombre||'')}</td><td data-label="Ventas del día">${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td data-label="Efectivo">${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td data-label="Yape">${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td data-label="Plin">${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td data-label="Tarjeta">${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td data-label="Estado">${c.estado}</td><td data-label="Diferencia">${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div>`;
   },
-  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
-  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
+  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
+  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
   reportes(){if(!Auth.requireAdmin())return '';const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),gastos=Store.totalExpenses(),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+s.total);return `<div class="page-header"><h1 class="page-title">📈 Reportes</h1></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
   async anularVenta(id){const motivo=prompt('Motivo de anulación:')?.trim();if(!motivo)return;confirmAction('La venta será anulada y el stock será devuelto. Esta acción no debe repetirse. ¿Confirmar?',async()=>{const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('historial')}return r;},{title:'Anular venta',confirmText:'Anular venta',danger:true,key:'cancel-sale:'+id})}
 ,

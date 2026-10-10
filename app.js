@@ -18,7 +18,7 @@ const Router = {
     inicio: () => Pages.dashboardEmployee()
   },
 
-  go(page) {
+  go(page, options = {}) {
     if (!Auth.isLoggedIn()) {
       App.showLogin();
       return;
@@ -30,6 +30,8 @@ const Router = {
       page = 'dashboard';
     }
     this.current = page;
+    if (typeof App !== 'undefined') App.refreshPending = false;
+    const previousScrollY = window.scrollY || 0;
     const renderer = this.routes[page] || this.routes.dashboard;
     const main = document.getElementById('main-content');
     main.innerHTML = renderer();
@@ -47,7 +49,7 @@ const Router = {
       fab.classList.add('hidden');
     }
     App.updateCartBadge();
-    window.scrollTo(0, 0);
+    window.scrollTo(0, options.preserveScroll ? previousScrollY : 0);
   },
 
   makeTablesMobileFriendly(root = document) {
@@ -77,6 +79,32 @@ const Router = {
 };
 
 const App = {
+  refreshPending: false,
+
+  isInteracting() {
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay && !overlay.classList.contains('hidden')) return true;
+    const el = document.activeElement;
+    if (!el) return false;
+    return ['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.isContentEditable;
+  },
+
+  requestRefresh() {
+    if (!Auth.isLoggedIn() || !Router.current) return;
+    if (this.isInteracting()) {
+      this.refreshPending = true;
+      return;
+    }
+    this.refreshPending = false;
+    Router.go(Router.current, { preserveScroll: true });
+  },
+
+  flushPendingRefresh() {
+    if (!this.refreshPending || this.isInteracting()) return;
+    this.refreshPending = false;
+    if (Auth.isLoggedIn() && Router.current) Router.go(Router.current, { preserveScroll: true });
+  },
+
   async init() {
     await Store.load();
     this.bindLogin();
@@ -127,6 +155,8 @@ const App = {
   },
 
   bindGlobal() {
+    document.addEventListener('focusout', () => setTimeout(() => this.flushPendingRefresh(), 0));
+
     document.getElementById('btn-logout')?.addEventListener('click', async () => {
       await Store.logout();
       this.showLogin();
@@ -277,4 +307,11 @@ window.addEventListener('error', (e) => {
 // Boot
 document.addEventListener('DOMContentLoaded', () => App.init());
 
-if ('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn));
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      reg.update().catch(() => {});
+    } catch (e) { console.warn(e); }
+  });
+}

@@ -66,6 +66,11 @@ const Modal = {
   close() {
     document.getElementById('modal-overlay').classList.add('hidden');
     document.getElementById('modal').innerHTML = '';
+    // Si Firestore recibió cambios mientras el usuario estaba dentro de un modal,
+    // refrescar recién al cerrarlo para no destruir formularios o confirmaciones.
+    setTimeout(() => {
+      try { App?.flushPendingRefresh?.(); } catch (_) {}
+    }, 0);
   }
 };
 
@@ -102,14 +107,22 @@ function confirmAction(message, onConfirm, options = {}) {
     yes.disabled = true; if(no) no.disabled = true;
     const old = yes.textContent; yes.textContent = 'Procesando…';
     try {
-      const result = await ActionGuard.run(key, async () => await onConfirm());
-      // Si la operación fue rechazada de forma controlada, el modal debe poder reintentarse/cancelarse.
-      if (result?.ok === false || result?.skipped) {
-        if (document.getElementById('confirm-yes') === yes) { yes.disabled=false; if(no) no.disabled=false; yes.textContent=old; }
+      await ActionGuard.run(key, async () => await onConfirm());
+      // Si el callback no cerró/reemplazó este modal, siempre devolver los controles
+      // a un estado utilizable. Esto evita que un error controlado deje “Procesando…”
+      // y los botones bloqueados por devolver undefined accidentalmente.
+      if (document.getElementById('confirm-yes') === yes) {
+        yes.disabled = false;
+        if (no) no.disabled = false;
+        yes.textContent = old;
       }
     } catch (e) {
       console.error(e); Toast.show(e?.message || 'No se pudo completar la acción', 'error');
-      if (document.getElementById('confirm-yes') === yes) { yes.disabled=false; if(no) no.disabled=false; yes.textContent=old; }
+      if (document.getElementById('confirm-yes') === yes) {
+        yes.disabled = false;
+        if (no) no.disabled = false;
+        yes.textContent = old;
+      }
     }
   };
 }

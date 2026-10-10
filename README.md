@@ -77,3 +77,18 @@ Etiquetas responsive incorporadas directamente en filas de Gastos, Movimientos, 
 ## v25
 - Anulación corregida incluso para ventas de cajas cerradas; ajusta el resumen de caja y devuelve stock.
 - Modales de confirmación con fondo estático: no se cierran al tocar/clicar fuera; solo Cancelar o X.
+
+
+## v26 - Integridad y estabilidad
+- Modales de confirmación ya no quedan bloqueados en “Procesando…” cuando una operación falla.
+- Eliminaciones lógicas de empleados, categorías y productos cierran correctamente el modal y reportan errores.
+- Firebase Authentication exige mínimo 6 caracteres al crear empleados.
+- En edición de empleado el correo de acceso queda de solo lectura para evitar desincronizar Firestore/Auth; se añadió envío de enlace de restablecimiento de contraseña.
+- Apertura de caja protegida entre pestañas y dispositivos mediante `cashLocks/{uid}` y transacción Firestore.
+- Las ventas validan que la caja corresponda al bloqueo activo del usuario y endurecen la forma del documento en reglas.
+- Las actualizaciones en tiempo real se difieren mientras el usuario escribe o tiene un modal abierto, evitando perder formularios/filtros por rerender.
+- Service Worker actualizado a `proyecto-x-v26`, con actualización de red prioritaria y limpieza de cachés anteriores.
+- Eliminado `data.js` de producción para no publicar credenciales/datos de demostración antiguos.
+
+### IMPORTANTE
+Publica el archivo `firestore.rules` de esta versión antes de probar apertura de caja o ventas. La colección `cashLocks` se crea automáticamente al abrir caja.

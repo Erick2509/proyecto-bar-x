@@ -29,7 +29,7 @@
 - Zona horaria America/Lima.
 
 ## Nota de seguridad
-La creación de empleados usa una segunda instancia de Firebase Auth para no cerrar la sesión del administrador. Las eliminaciones son lógicas (Inactivo) para preservar historial.
+La creación de empleados usa una segunda instancia de Firebase Auth para no cerrar la sesión del administrador. Los empleados se desactivan para preservar acceso/historial; productos y categorías se eliminan del catálogo y se archiva una copia técnica para trazabilidad.
 
 ## Versión v4 - producción
 - Corregida normalización de perfiles `nombre/nombres`, `apellido/apellidos`, `activo/Activo`.
@@ -92,3 +92,13 @@ Etiquetas responsive incorporadas directamente en filas de Gastos, Movimientos, 
 
 ### IMPORTANTE
 Publica el archivo `firestore.rules` de esta versión antes de probar apertura de caja o ventas. La colección `cashLocks` se crea automáticamente al abrir caja.
+
+
+## v27 - Caja y eliminación real
+- Rediseño del historial de caja: tema oscuro consistente, mayor espacio para historial, estados y diferencias con badges, fecha/hora legibles y Yape/Plin agrupados.
+- Las cajas abiertas muestran sus ventas actuales en el historial en vez de guiones.
+- Productos y categorías ahora se eliminan de las colecciones activas (`products` / `categories`) en lugar de cambiar a Inactivo.
+- Antes de eliminar una categoría se comprueba que no tenga productos asociados.
+- Se conserva una copia técnica en `deletedProducts` / `deletedCategories` para trazabilidad y para permitir anular ventas históricas sin revivir productos eliminados.
+- Caché PWA actualizado a `proyecto-x-v27`.
+- La paginación ahora usa una clase con `display:none!important`, por lo que también funciona en las tarjetas móviles responsive.

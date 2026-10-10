@@ -10,7 +10,7 @@ const Pages = {
     const totalPages = Math.max(1, Math.ceil(rows.length / size));
     page = Math.min(Math.max(1, Number(page)||1), totalPages);
     this._pages[key] = page;
-    rows.forEach((r,i) => r.style.display = (i >= (page-1)*size && i < page*size) ? '' : 'none');
+    rows.forEach((r,i) => { r.style.display=''; r.classList.toggle('pagination-hidden', !(i >= (page-1)*size && i < page*size)); });
     let nav = document.getElementById('pager-'+key);
     if (!nav) {
       nav = document.createElement('div'); nav.id='pager-'+key; nav.className='pagination-bar';
@@ -435,17 +435,18 @@ const Pages = {
     Router.go('categorias');
   },
   deleteCategoria(id) {
-    const count = Store.state.products.filter(p => p.categoriaId === id && p.estado === 'Activo').length;
+    const c = Store.getCategory(id);
+    const count = Store.state.products.filter(p => p.categoriaId === id).length;
     if (count > 0) {
-      Toast.show(`No se puede eliminar: tiene ${count} producto(s) asociado(s)`, 'error');
+      Toast.show(`No se puede eliminar “${c?.nombre || 'esta categoría'}”: tiene ${count} producto(s). Elimínalos o cámbialos de categoría primero.`, 'error', 5200);
       return;
     }
-    confirmAction('¿Desactivar esta categoría?', async () => {
+    confirmAction(`La categoría “${c?.nombre || ''}” se eliminará del catálogo. El historial técnico se conservará en archivo. ¿Continuar?`, async () => {
       const res = await Store.deleteCategory(id);
-      Toast.show(res.ok ? 'Categoría desactivada' : res.error, res.ok ? 'success' : 'error');
+      Toast.show(res.ok ? 'Categoría eliminada correctamente' : res.error, res.ok ? 'success' : 'error');
       if (res.ok) { Modal.close(); Router.go('categorias'); }
       return res;
-    }, { title:'Desactivar categoría', confirmText:'Desactivar', danger:true, key:'delete-category:'+id });
+    }, { title:'Eliminar categoría', confirmText:'Eliminar definitivamente', danger:true, key:'delete-category:'+id });
   },
 
   // ---------- PRODUCTOS ----------
@@ -671,12 +672,16 @@ const Pages = {
     }, {title:'Confirmar ingreso de stock', confirmText:'Agregar stock', danger:false, key:'add-stock:'+productoId});
   },
   deleteProducto(id) {
-    confirmAction('¿Desactivar este producto?', async () => {
+    const p = Store.getProduct(id);
+    if (!p) return Toast.show('Producto no encontrado', 'error');
+    const stock = Number(p.stock || 0);
+    const avisoStock = stock > 0 ? ` Actualmente tiene ${stock} unidad(es) en stock.` : '';
+    confirmAction(`“${p.nombre}” se eliminará del catálogo y dejará de aparecer en ventas e inventario.${avisoStock} El historial de ventas y movimientos se conservará. ¿Continuar?`, async () => {
       const res = await Store.deleteProduct(id);
-      Toast.show(res.ok ? 'Producto desactivado' : res.error, res.ok ? 'success' : 'error');
+      Toast.show(res.ok ? 'Producto eliminado correctamente' : res.error, res.ok ? 'success' : 'error');
       if (res.ok) { Modal.close(); Router.go('productos'); }
       return res;
-    }, { title:'Desactivar producto', confirmText:'Desactivar', danger:true, key:'delete-product:'+id });
+    }, { title:'Eliminar producto', confirmText:'Eliminar definitivamente', danger:true, key:'delete-product:'+id });
   },
 
   // ---------- MOVIMIENTOS DE STOCK ----------
@@ -1285,12 +1290,45 @@ const Pages = {
     const esperado=Number(abierta?.montoInicial||0)+efectivo;
     const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
     const cajaAnterior=abierta&&abierta.fecha!==hoy;
+    const metricasCaja=(c)=>{
+      const sales=Store.state.sales.filter(s=>s.cajaId===c.id&&s.estado!=='Anulada');
+      const by=m=>sales.filter(s=>String(s.metodoPago||'')===m).reduce((a,b)=>a+Number(b.total||0),0);
+      const calc={efectivo:by('Efectivo'),yape:by('Yape'),plin:by('Plin'),tarjeta:by('Tarjeta')};
+      calc.total=calc.efectivo+calc.yape+calc.plin+calc.tarjeta;
+      return {
+        total:c.totalVentasDia==null?calc.total:Number(c.totalVentasDia||0),
+        efectivo:c.efectivoVentas==null?calc.efectivo:Number(c.efectivoVentas||0),
+        yape:c.yapeVentas==null?calc.yape:Number(c.yapeVentas||0),
+        plin:c.plinVentas==null?calc.plin:Number(c.plinVentas||0),
+        tarjeta:c.tarjetaVentas==null?calc.tarjeta:Number(c.tarjetaVentas||0)
+      };
+    };
+    const historyRows=hist.map(c=>{
+      const m=metricasCaja(c), isOpen=c.estado==='Abierta', diff=c.diferencia==null?null:Number(c.diferencia||0);
+      const status=isOpen?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>';
+      const diffHtml=isOpen?'<span class="badge badge-warning">Pendiente</span>':Math.abs(diff||0)<0.005?'<span class="badge badge-success">S/ 0.00</span>':`<span class="badge ${diff<0?'badge-danger':'badge-warning'}">${diff>0?'+':''}${Utils.formatMoney(diff)}</span>`;
+      return `<tr class="${isOpen?'ux-cash-row-open':''}">
+        <td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${String(c.hora||'').slice(0,5)||'—'}</small></div></td>
+        <td data-label="Usuario"><strong>${Utils.escapeHtml(c.usuarioNombre||'—')}</strong></td>
+        <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(m.total)}</strong></td>
+        <td data-label="Efectivo">${Utils.formatMoney(m.efectivo)}</td>
+        <td data-label="Yape / Plin"><div class="ux-split-payment"><span>Yape <strong>${Utils.formatMoney(m.yape)}</strong></span><span>Plin <strong>${Utils.formatMoney(m.plin)}</strong></span></div></td>
+        <td data-label="Tarjeta">${Utils.formatMoney(m.tarjeta)}</td>
+        <td data-label="Estado">${status}</td>
+        <td data-label="Diferencia">${diffHtml}</td>
+      </tr>`;
+    }).join('')||'<tr><td colspan="8">Sin registros de caja</td></tr>';
     return `<div class="page-header ux-page-head"><div><h1 class="page-title">Caja</h1><p class="ux-page-sub">Apertura, ventas y cierre de turno</p></div></div>
-      ${cajaAnterior?`<div class="alert alert-warning"><strong>⚠️ Caja pendiente del ${abierta.fecha}</strong><br>Ciérrala antes de registrar ventas de hoy.</div>`:''}
+      ${cajaAnterior?`<div class="alert alert-warning"><strong>⚠️ Caja pendiente del ${Utils.formatDate(abierta.fecha)}</strong><br>Ciérrala antes de registrar ventas de hoy.</div>`:''}
       <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Apertura ${String(abierta.hora||'').slice(0,5)} · Inicial ${Utils.formatMoney(abierta.montoInicial||0)}`:'Abre una caja para comenzar a vender'}</p></div></div></div>
       <div class="stat-cards ux-payment-summary"><div class="stat-card"><div class="stat-label">Total vendido</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div><div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">En caja: ${Utils.formatMoney(esperado)}</div></div><div class="stat-card"><div class="stat-label">Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">${Utils.formatMoney(yape)} / ${Utils.formatMoney(plin)}</div></div><div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos electrónicos</div></div></div>
-      <div class="ux-cash-layout"><div class="card ux-cash-action"><h3>${abierta?'Cerrar caja':'Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Cuenta solo el dinero físico disponible en caja.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Dinero disponible antes de realizar la primera venta.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
-      <div class="card"><div class="ux-section-head"><div><h3>Historial de caja</h3><p>Sesiones anteriores y diferencias</p></div></div><div class="table-responsive"><table class="table"><thead><tr><th>Fecha</th><th>Usuario</th><th>Ventas del día</th><th>Efectivo</th><th>Yape</th><th>Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${hist.map(c=>`<tr><td data-label="Fecha">${c.fecha} ${c.hora?.slice(0,5)||''}</td><td data-label="Usuario">${Utils.escapeHtml(c.usuarioNombre||'')}</td><td data-label="Ventas del día">${c.totalVentasDia==null?'—':Utils.formatMoney(c.totalVentasDia)}</td><td data-label="Efectivo">${c.efectivoVentas==null?'—':Utils.formatMoney(c.efectivoVentas)}</td><td data-label="Yape">${c.yapeVentas==null?'—':Utils.formatMoney(c.yapeVentas)}</td><td data-label="Plin">${c.plinVentas==null?'—':Utils.formatMoney(c.plinVentas)}</td><td data-label="Tarjeta">${c.tarjetaVentas==null?'—':Utils.formatMoney(c.tarjetaVentas)}</td><td data-label="Estado">${c.estado}</td><td data-label="Diferencia">${c.diferencia==null?'—':Utils.formatMoney(c.diferencia)}</td></tr>`).join('')||'<tr><td colspan="9">Sin registros</td></tr>'}</tbody></table></div></div></div>`;
+      <div class="ux-cash-layout">
+        <div class="card ux-cash-action"><h3>${abierta?'Cerrar caja':'Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Cuenta solo el dinero físico disponible en caja.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Dinero disponible antes de realizar la primera venta.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
+        <div class="card ux-cash-history-card">
+          <div class="ux-section-head ux-cash-history-head"><div><h3>Historial de caja</h3><p>Sesiones, medios de pago y diferencias</p></div><span class="ux-history-count">${hist.length} sesión${hist.length===1?'':'es'}</span></div>
+          <div class="table-wrap ux-cash-history"><table><thead><tr><th>Apertura</th><th>Usuario</th><th>Ventas</th><th>Efectivo</th><th>Yape / Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div>
+        </div>
+      </div>`;
   },
   openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},

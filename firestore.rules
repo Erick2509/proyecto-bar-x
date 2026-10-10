@@ -18,7 +18,12 @@ service cloud.firestore {
     }
     match /categories/{id} {
       allow read: if active();
-      allow create, update: if admin();
+      allow create, update, delete: if admin();
+    }
+    match /deletedCategories/{id} {
+      // Archivo técnico: la categoría desaparece del catálogo, pero queda una copia
+      // para conservar trazabilidad de eliminaciones administrativas.
+      allow read, create, update: if admin();
       allow delete: if false;
     }
     match /products/{id} {
@@ -30,6 +35,12 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
         && positiveNumber(request.resource.data.stock)
         && request.resource.data.stock < resource.data.stock);
+      allow delete: if admin();
+    }
+    match /deletedProducts/{id} {
+      // Los productos eliminados salen de /products y no vuelven a ventas/inventario.
+      // El archivo permite mantener integridad si después se anula una venta histórica.
+      allow read, create, update: if admin();
       allow delete: if false;
     }
     match /sales/{id} {

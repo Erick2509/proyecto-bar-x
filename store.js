@@ -63,10 +63,46 @@ const Store = (() => {
   async function deleteUser(id){try{if(id===state.currentUser?.id)return{ok:false,error:'No puedes desactivar tu propia cuenta'};await db.collection('users').doc(id).update({estado:'Inactivo'});await audit('DESACTIVAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar el empleado'}}}
   async function addCategory(nombre){const id=docId(),c={nombre:nombre.trim(),estado:'Activo'};await db.collection('categories').doc(id).set(c);await audit('CREAR_CATEGORIA',c.nombre);return{ok:true,category:{id,...c}}}
   async function updateCategory(id,data){await db.collection('categories').doc(id).update(clean(data));await audit('EDITAR_CATEGORIA',id);return{ok:true}}
-  async function deleteCategory(id){try{if(state.products.some(p=>p.categoriaId===id&&p.estado==='Activo'))return{ok:false,error:'La categoría tiene productos activos asociados'};await db.collection('categories').doc(id).update({estado:'Inactivo'});await audit('DESACTIVAR_CATEGORIA',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar la categoría'}}}
+  async function deleteCategory(id){
+    try{
+      if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar categorías'};
+      const c=getCategory(id); if(!c)return{ok:false,error:'Categoría no encontrada'};
+      // Verificación local inmediata y confirmación contra Firestore para no dejar productos huérfanos.
+      const localCount=state.products.filter(p=>p.categoriaId===id).length;
+      if(localCount>0)return{ok:false,error:`No se puede eliminar: la categoría tiene ${localCount} producto(s). Elimínalos o muévelos primero.`};
+      const linked=await db.collection('products').where('categoriaId','==',id).limit(1).get();
+      if(!linked.empty)return{ok:false,error:'No se puede eliminar: todavía existen productos asociados a esta categoría'};
+      const ref=db.collection('categories').doc(id), archive=db.collection('deletedCategories').doc(id), t=limaParts();
+      await db.runTransaction(async tx=>{
+        const snap=await tx.get(ref); if(!snap.exists)throw Error('Categoría no encontrada');
+        tx.set(archive,{...snap.data(),originalId:id,eliminadoFecha:t.fecha,eliminadoHora:t.hora,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.delete(ref);
+      });
+      state.categories=state.categories.filter(x=>x.id!==id);
+      try{await audit('ELIMINAR_CATEGORIA',`${id}: ${c.nombre||''}`)}catch(err){console.warn('Auditoría categoría eliminada:',err)}
+      return{ok:true};
+    }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió eliminar la categoría. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo eliminar la categoría')}}
+  }
   async function addProduct(data){const id=docId(),stock=Number(data.stock)||0,t=limaParts();const p={nombre:data.nombre.trim(),categoriaId:data.categoriaId,precioCompra:Number(data.precioCompra),precioVenta:Number(data.precioVenta),stock,stockMinimo:Number(data.stockMinimo)||0,descripcion:(data.descripcion||'').trim(),imagen:data.imagen||'📦',estado:data.estado||'Activo'};const b=db.batch();b.set(db.collection('products').doc(id),p);if(stock>0){const mid=docId();b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});}await b.commit();await audit('CREAR_PRODUCTO',p.nombre);return{ok:true,product:{id,...p}}}
   async function updateProduct(id,data){const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};const patch={nombre:data.nombre?.trim()??p.nombre,categoriaId:data.categoriaId??p.categoriaId,precioCompra:Number(data.precioCompra??p.precioCompra),precioVenta:Number(data.precioVenta??p.precioVenta),stockMinimo:Number(data.stockMinimo??p.stockMinimo),descripcion:data.descripcion?.trim()??p.descripcion,imagen:data.imagen||p.imagen,estado:data.estado||p.estado};await db.collection('products').doc(id).update(patch);await audit('EDITAR_PRODUCTO',p.nombre);return{ok:true}}
-  async function deleteProduct(id){try{await db.collection('products').doc(id).update({estado:'Inactivo'});await audit('DESACTIVAR_PRODUCTO',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar el producto'}}}
+  async function deleteProduct(id){
+    try{
+      if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar productos'};
+      const p=getProduct(id); if(!p)return{ok:false,error:'Producto no encontrado'};
+      const ref=db.collection('products').doc(id), archive=db.collection('deletedProducts').doc(id), t=limaParts();
+      await db.runTransaction(async tx=>{
+        const snap=await tx.get(ref); if(!snap.exists)throw Error('Producto no encontrado');
+        const data=snap.data(), stockAlEliminar=Number(data.stock||0);
+        tx.set(archive,{...data,originalId:id,categoriaNombre:getCategory(data.categoriaId)?.nombre||'',stockAlEliminar,stockDevueltoPorAnulaciones:0,eliminadoFecha:t.fecha,eliminadoHora:t.hora,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        if(stockAlEliminar>0)tx.set(db.collection('movements').doc(),{...t,productoId:id,productoNombre:data.nombre||'',tipo:'Eliminación',cantidad:stockAlEliminar,stockAnterior:stockAlEliminar,stockNuevo:0,usuarioId:state.currentUser.id,motivo:'Producto eliminado del catálogo'});
+        tx.delete(ref);
+      });
+      state.products=state.products.filter(x=>x.id!==id);
+      state.cart=state.cart.filter(x=>x.productoId!==id);
+      try{await audit('ELIMINAR_PRODUCTO',`${id}: ${p.nombre||''}`)}catch(err){console.warn('Auditoría producto eliminado:',err)}
+      return{ok:true};
+    }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió eliminar el producto. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo eliminar el producto')}}
+  }
   async function addMovement({productoId,tipo,cantidad,costoUnitario,motivo}){cantidad=Number(cantidad);if(cantidad<=0)return{ok:false,error:'Cantidad inválida'};const pr=db.collection('products').doc(productoId);try{await db.runTransaction(async tx=>{const s=await tx.get(pr);if(!s.exists)throw Error('Producto no encontrado');const p=s.data(),old=Number(p.stock)||0;const negative=['Salida','Merma','Ajuste -'].includes(tipo);const neu=negative?old-cantidad:old+cantidad;if(neu<0)throw Error('Stock insuficiente');const t=limaParts(),m={...t,productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:motivo||''};tx.update(pr,{stock:neu,...(tipo==='Entrada'&&Number(costoUnitario)>0?{precioCompra:Number(costoUnitario)}:{})});tx.set(db.collection('movements').doc(),m);if(tipo==='Entrada'&&Number(costoUnitario)>0)tx.set(db.collection('expenses').doc(),{...t,concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*Number(costoUnitario)).toFixed(2),origen:'Compra de stock',usuarioId:state.currentUser.id});});await audit('MOVIMIENTO_STOCK',`${tipo} ${productoId} x${cantidad}`);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
   function addToCart(productoId,qty=1){const p=getProduct(productoId);if(!p||p.estado!=='Activo'||p.stock<=0)return{ok:false,error:'Producto no disponible'};const i=state.cart.find(x=>x.productoId===productoId),n=(i?.cantidad||0)+qty;if(n>p.stock)return{ok:false,error:`Stock insuficiente (disponible: ${p.stock})`};i?i.cantidad=n:state.cart.push({productoId,cantidad:qty});return{ok:true}}
   function updateCartQty(id,c){const p=getProduct(id);if(!p)return{ok:false};if(c<=0)state.cart=state.cart.filter(x=>x.productoId!==id);else{if(c>p.stock)return{ok:false,error:`Máximo ${p.stock} unidades`};const i=state.cart.find(x=>x.productoId===id);if(i)i.cantidad=c;}return{ok:true}}
@@ -111,17 +147,30 @@ const Store = (() => {
         for(const i of items){
           if(!i.productoId)throw Error('La venta contiene un producto inválido');
           const ref=db.collection('products').doc(i.productoId), snap=await tx.get(ref);
-          if(!snap.exists)throw Error(`Producto no encontrado: ${i.nombre||i.productoId}`);
+          let archiveRef=null,archiveSnap=null;
+          if(!snap.exists){
+            archiveRef=db.collection('deletedProducts').doc(i.productoId);
+            archiveSnap=await tx.get(archiveRef);
+          }
+          if(!snap.exists&&!archiveSnap?.exists)throw Error(`Producto no encontrado ni archivado: ${i.nombre||i.productoId}`);
           const qty=Number(i.cantidad||0); if(!Number.isFinite(qty)||qty<=0)throw Error(`Cantidad inválida en ${i.nombre||'producto'}`);
-          productReads.push({item:i,ref,snap,qty});
+          productReads.push({item:i,ref,snap,archiveRef,archiveSnap,qty});
         }
 
         // 2) Escrituras después de terminar las lecturas.
         const t=limaParts();
         for(const x of productReads){
-          const old=Number(x.snap.data().stock||0),neu=old+x.qty;
-          tx.update(x.ref,{stock:neu});
-          tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
+          if(x.snap.exists){
+            const old=Number(x.snap.data().stock||0),neu=old+x.qty;
+            tx.update(x.ref,{stock:neu});
+            tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
+          }else{
+            // El producto fue eliminado del catálogo. La devolución se conserva en su archivo
+            // para no revivirlo ni perder trazabilidad del stock histórico.
+            const archived=x.archiveSnap.data(),old=Number(archived.stockDevueltoPorAnulaciones||0),neu=old+x.qty;
+            tx.update(x.archiveRef,{stockDevueltoPorAnulaciones:neu,ultimaDevolucionFecha:t.fecha,ultimaDevolucionHora:t.hora,ultimaVentaAnuladaId:id});
+            tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||archived.nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,productoEliminado:true,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo} · producto eliminado del catálogo`});
+          }
         }
 
         // Si la caja ya fue cerrada, mantener su resumen contable consistente.

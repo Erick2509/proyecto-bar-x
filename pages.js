@@ -26,8 +26,9 @@ const Pages = {
   dashboardAdmin() {
     const salesToday = Store.salesToday();
     const totalToday = salesToday.reduce((s, x) => s + x.total, 0);
-    const allSales = Store.state.sales;
-    const totalAll = Store.totalSales();
+    const allSales = salesToday;
+    const totalAll = totalToday;
+    const ticketPromedio = salesToday.length ? totalToday / salesToday.length : 0;
     const expToday = Store.expensesToday();
     const totalExpToday = expToday.reduce((s, x) => s + x.monto, 0);
     const low = Store.lowStockProducts();
@@ -51,9 +52,9 @@ const Pages = {
           <div class="stat-sub">${salesToday.length} venta(s)</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Ventas registradas</div>
-          <div class="stat-value">${allSales.length}</div>
-          <div class="stat-sub">Total: ${Utils.formatMoney(totalAll)}</div>
+          <div class="stat-label">Ticket promedio hoy</div>
+          <div class="stat-value">${Utils.formatMoney(ticketPromedio)}</div>
+          <div class="stat-sub">${allSales.length} venta(s) de hoy</div>
         </div>
         <div class="stat-card amber">
           <div class="stat-label">Gastos de hoy</div>
@@ -79,7 +80,7 @@ const Pages = {
                     const emp = Store.getUser(s.empleadoId);
                     return `<tr>
                       <td>${Utils.formatDate(s.fecha)} ${String(s.hora||'—').slice(0,5)}</td>
-                      <td>${Utils.escapeHtml(emp ? emp.nombres : '—')}</td>
+                      <td>${Utils.escapeHtml(emp ? emp.nombres : (s.empleadoNombre || '—'))}</td>
                       <td style="color:var(--amber)">${Utils.formatMoney(s.total)}</td>
                       <td>${s.metodoPago}</td>
                     </tr>`;
@@ -118,12 +119,11 @@ const Pages = {
   // ---------- DASHBOARD EMPLEADO ----------
   dashboardEmployee() {
     const user = Auth.currentUser();
-    const mySales = Store.state.sales.filter(s => s.empleadoId === user.id && s.estado !== 'Anulada');
     const today = Store.today();
-    const myToday = mySales.filter(s => s.fecha === today);
+    const myToday = Store.state.sales.filter(s => s.empleadoId === user.id && s.estado !== 'Anulada' && s.fecha === today);
     const totalToday = myToday.reduce((s, x) => s + x.total, 0);
-    const totalAll = mySales.reduce((s, x) => s + x.total, 0);
-    const itemsSold = mySales.reduce((s, sale) => s + sale.items.reduce((a, i) => a + i.cantidad, 0), 0);
+    const ticketPromedio = myToday.length ? totalToday / myToday.length : 0;
+    const itemsSold = myToday.reduce((s, sale) => s + (sale.items||[]).reduce((a, i) => a + i.cantidad, 0), 0);
     const low = Store.lowStockProducts();
 
     return `
@@ -136,9 +136,9 @@ const Pages = {
           <div class="stat-sub">${myToday.length} venta(s)</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Ventas realizadas</div>
-          <div class="stat-value">${mySales.length}</div>
-          <div class="stat-sub">Total: ${Utils.formatMoney(totalAll)}</div>
+          <div class="stat-label">Ticket promedio hoy</div>
+          <div class="stat-value">${Utils.formatMoney(ticketPromedio)}</div>
+          <div class="stat-sub">Solo actividad de hoy</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Productos vendidos</div>
@@ -858,7 +858,7 @@ const Pages = {
     const movs = [...Store.state.movements].sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora));
     return `
       <div class="page-header">
-        <h1 class="page-title">Movimientos de stock</h1>
+        <div><h1 class="page-title">Movimientos de stock</h1><p class="ux-page-sub">Mostrando hasta 250 movimientos de los últimos 31 días.</p></div>
       </div>
       <div class="table-wrap">
         <table>
@@ -905,7 +905,7 @@ const Pages = {
           <div class="stat-value amber">${Utils.formatMoney(todayTotal)}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Total de gastos</div>
+          <div class="stat-label">Gastos últimos 31 días</div>
           <div class="stat-value">${Utils.formatMoney(allTotal)}</div>
         </div>
       </div>
@@ -1205,7 +1205,7 @@ const Pages = {
 
     return `
       <div class="page-header">
-        <h1 class="page-title">${Auth.isAdmin() ? 'Historial de ventas' : 'Mis ventas'}</h1>
+        <div><h1 class="page-title">${Auth.isAdmin() ? 'Historial de ventas' : 'Mis ventas'}</h1><p class="ux-page-sub">Carga optimizada: ${Auth.isAdmin()?'últimos 31 días (máx. 250)':'últimos 14 días'}. Si eliges otra fecha se consulta solo ese día.</p></div>
       </div>
       <div class="stat-cards" style="margin-bottom:1.25rem">
         <div class="stat-card">
@@ -1223,7 +1223,7 @@ const Pages = {
           <option value="Plin">Plin</option>
           <option value="Tarjeta">Tarjeta</option>
         </select>
-        <input type="date" id="hist-date" class="filter-select" onchange="Pages.filterHistorial()" />
+        <input type="date" id="hist-date" class="filter-select" onchange="Pages.filterHistorial(true)" />
       </div>
       <div class="table-wrap">
         <table>
@@ -1257,11 +1257,12 @@ const Pages = {
       </tr>`;
     }).join('');
   },
-  filterHistorial() {
+  async filterHistorial(loadDate = false) {
     // Filtrar desde los datos, no ocultando filas. Así funciona igual en tabla desktop
     // y en las tarjetas responsive de móvil/tablet.
     const method = (document.getElementById('hist-method')?.value || '').trim().toLowerCase();
     const date = document.getElementById('hist-date')?.value || '';
+    if (loadDate && date && Store.loadSalesForDate) await Store.loadSalesForDate(date);
     const q = (document.getElementById('hist-search')?.value || '').trim().toLowerCase();
     const user = Auth.currentUser();
     let sales = [...Store.state.sales];
@@ -1419,24 +1420,46 @@ const Pages = {
   },
   openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
-  reportes(){if(!Auth.requireAdmin())return '';const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),gastos=Store.totalExpenses(),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+s.total);return `<div class="page-header"><h1 class="page-title">📈 Reportes</h1></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
+  reportes(){if(!Auth.requireAdmin())return '';const desde=(()=>{const d=new Date();d.setDate(d.getDate()-31);return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d)})();const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),exp=Store.state.expenses.filter(e=>e.fecha>=desde),gastos=exp.reduce((a,b)=>a+Number(b.monto||0),0),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+Number(s.total||0));return `<div class="page-header"><div><h1 class="page-title">📈 Reportes</h1><p class="ux-page-sub">Resumen optimizado de los últimos 31 días · máximo 250 documentos por historial.</p></div></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
   async anularVenta(id){const motivo=prompt('Motivo de anulación:')?.trim();if(!motivo)return;confirmAction('La venta será anulada y el stock será devuelto. Esta acción no debe repetirse. ¿Confirmar?',async()=>{const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('historial')}return r;},{title:'Anular venta',confirmText:'Anular venta',danger:true,key:'cancel-sale:'+id})}
 ,
   configuracion() {
     if (!Auth.requireAdmin()) return '';
-    const u = Auth.currentUser() || {};
-    return `<div class="page-header"><h1 class="page-title">⚙️ Configuración</h1></div>
-      <div class="row g-3">
+    const u = Auth.currentUser() || {}, m = Store.getUsageStats ? Store.getUsageStats() : {reads:0,writes:0,deletes:0,knownBytes:0,knownDocs:0,limits:{reads:50000,writes:20000,deletes:20000,storageBytes:1073741824}};
+    const pct=(v,max)=>Math.min(100,Math.max(0,(Number(v||0)/max)*100));
+    const fmtBytes=(n)=>{n=Number(n||0);if(n<1024)return `${n} B`;if(n<1048576)return `${(n/1024).toFixed(1)} KB`;if(n<1073741824)return `${(n/1048576).toFixed(2)} MB`;return `${(n/1073741824).toFixed(3)} GB`;};
+    const readPct=pct(m.reads,m.limits.reads), writePct=pct(m.writes,m.limits.writes), deletePct=pct(m.deletes,m.limits.deletes), storagePct=pct(m.knownBytes,m.limits.storageBytes);
+    const meter=(label,value,max,p,sub)=>`<div class="ux-usage-item"><div class="ux-usage-top"><span>${label}</span><strong>${value.toLocaleString('es-PE')} / ${max.toLocaleString('es-PE')}</strong></div><div class="ux-meter"><span style="width:${p.toFixed(2)}%"></span></div><small>${p.toFixed(2)}% · ${sub}</small></div>`;
+    return `<div class="page-header"><div><h1 class="page-title">⚙️ Configuración</h1><p class="ux-page-sub">Estado del sistema y consumo preventivo de Firebase.</p></div></div>
+      <div class="ux-usage-grid">
+        <div class="card ux-usage-card">
+          <div class="ux-section-head"><div><h3>🔥 Uso de Firestore hoy</h3><p>Estimación registrada por este navegador/PWA.</p></div><span class="badge badge-success">Optimización activa</span></div>
+          ${meter('Lecturas estimadas',m.reads,m.limits.reads,readPct,'cuota gratuita diaria de Firestore Standard')}
+          ${meter('Escrituras estimadas',m.writes,m.limits.writes,writePct,'cuota gratuita diaria')}
+          ${meter('Eliminaciones estimadas',m.deletes,m.limits.deletes,deletePct,'cuota gratuita diaria')}
+          <div class="ux-usage-note">ℹ️ Firebase no entrega al navegador el contador facturado global de todos los dispositivos. Este panel cuenta las operaciones realizadas por esta instalación. Para el valor oficial usa el panel de Firebase.</div>
+          <a class="btn btn-secondary" target="_blank" rel="noopener" href="https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/-default-/usage">Abrir consumo oficial de Firebase ↗</a>
+        </div>
+        <div class="card ux-usage-card">
+          <div class="ux-section-head"><div><h3>💾 Almacenamiento Firestore</h3><p>Cuota total gratuita y datos conocidos por la app.</p></div></div>
+          <div class="ux-storage-number"><strong>${fmtBytes(m.knownBytes)}</strong><span>de 1 GB gratuito</span></div>
+          <div class="ux-meter ux-meter-storage"><span style="width:${storagePct.toFixed(4)}%"></span></div>
+          <div class="ux-storage-meta"><span>${m.knownDocs} documentos cargados</span><span>${storagePct.toFixed(4)}% mínimo conocido</span></div><div class="ux-storage-meta"><span>Datos leídos hoy por esta instalación</span><strong>${fmtBytes(m.bytesRead||0)}</strong></div>
+          <div class="ux-usage-note">El tamaño mostrado es una <strong>estimación mínima</strong> de los documentos que esta app ya conoce. El almacenamiento real de Firestore también incluye índices, metadatos y documentos históricos no descargados. El total oficial se consulta en Firebase/Google Cloud.</div>
+        </div>
+      </div>
+      <div class="row g-3 mt-1">
         <div class="col-12 col-lg-6"><div class="card p-3">
           <h5>Proyecto X Bar</h5><p class="text-muted mb-3">Información general del sistema.</p>
           <div class="mb-2"><strong>Administrador:</strong> ${Utils.escapeHtml(u.nombre || u.nombres || 'Administrador')}</div>
           <div class="mb-2"><strong>Correo:</strong> ${Utils.escapeHtml(u.email || '')}</div>
-          <div class="mb-2"><strong>Rol:</strong> ${Utils.escapeHtml(u.role || 'admin')}</div>
-          <div><strong>Base de datos:</strong> Firebase / Firestore</div>
+          <div class="mb-2"><strong>Base de datos:</strong> Firebase / Firestore</div>
+          <div><strong>Proyecto:</strong> ${Utils.escapeHtml(firebaseConfig.projectId || '')}</div>
         </div></div>
         <div class="col-12 col-lg-6"><div class="card p-3">
-          <h5>Aplicación</h5><p>La configuración sensible de Firebase permanece en <code>firebase-config.js</code>.</p>
-          <p class="mb-0">Los cambios administrativos del negocio se realizan desde Productos, Categorías, Empleados, Caja y Movimientos.</p>
+          <h5>⚡ Optimización aplicada</h5>
+          <div class="ux-opt-list"><span>✓ Productos en tiempo real</span><span>✓ Ventas solo del día en tiempo real</span><span>✓ Historiales bajo demanda</span><span>✓ Máximo 250 registros por consulta histórica</span><span>✓ Caché persistente en el dispositivo</span><span>✓ Cierre de caja reutiliza ventas ya cargadas</span><span>✓ Validación de caja reutilizada durante la sesión</span></div>
+          <p class="text-muted mt-3 mb-0">La configuración sensible permanece en <code>firebase-config.js</code>.</p>
         </div></div>
       </div>`;
   }

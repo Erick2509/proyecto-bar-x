@@ -22,18 +22,120 @@ const Store = (() => {
   function getUser(id){return state.users.find(x=>x.id===id)}
   function stockStatus(p){return p.stock<=0?'agotado':p.stock<=p.stockMinimo?'bajo':'normal'}
   function lowStockProducts(){return state.products.filter(p=>p.estado==='Activo'&&p.stock<=p.stockMinimo)}
-  function listen(name, query=null){ refs[name]?.(); const source=query||db.collection(name); refs[name]=source.onSnapshot(s=>{state[name]=s.docs.map(d=>name==='users'?normalizeUser({id:d.id,...d.data()}):({id:d.id,...d.data()})); if(Auth?.isLoggedIn?.() && Router?.current) App?.requestRefresh?.();},err=>{console.error('Firestore '+name+':',err); try{Toast.show('Error cargando '+name+': '+(err.message||err),'error')}catch(_){}}); }
-  async function loadData(){
-    if(state.currentUser?.role==='admin'){ for(const n of ['users','categories','products','sales','movements','expenses','cashSessions']) listen(n); return; }
-    listen('categories'); listen('products');
-    listen('sales',db.collection('sales').where('empleadoId','==',state.currentUser.id));
-    listen('cashSessions',db.collection('cashSessions').where('usuarioId','==',state.currentUser.id));
+  // ===== OPTIMIZACIÓN FIRESTORE v29 =====
+  // Solo mantenemos listeners en datos que realmente necesitan tiempo real. Los historiales
+  // se consultan bajo demanda y con límites para evitar descargar toda la base en cada inicio.
+  const loadedAt = {};
+  let coreLoadedFor = null;
+  const FREE_LIMITS = {reads:50000,writes:20000,deletes:20000,storageBytes:1073741824};
+  const encoder = typeof TextEncoder!=='undefined' ? new TextEncoder() : null;
+  function usageDate(){ return limaParts().fecha; }
+  function usageKey(){ return `px_firestore_usage_${usageDate()}`; }
+  function readUsage(){
+    try{ return {...{date:usageDate(),reads:0,writes:0,deletes:0,bytesRead:0},...JSON.parse(localStorage.getItem(usageKey())||'{}')}; }catch(_){ return {date:usageDate(),reads:0,writes:0,deletes:0,bytesRead:0}; }
   }
-  function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]);}
-  async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const d=await db.collection('users').doc(u.uid).get(); if(!d.exists){await fbAuth.signOut();resolve();return;} state.currentUser=normalizeUser({id:u.uid,...d.data()}); if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
-  async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const d=await db.collection('users').doc(c.user.uid).get();if(!d.exists||!isActive(d.data())){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=normalizeUser({id:c.user.uid,...d.data()});await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
+  function saveUsage(u){ try{localStorage.setItem(usageKey(),JSON.stringify(u));}catch(_){} }
+  function byteSize(v){ try{const str=JSON.stringify(v??{});return encoder?encoder.encode(str).length:unescape(encodeURIComponent(str)).length;}catch(_){return 0;} }
+  function trackUsage(type,count=1,docs=[]){
+    const u=readUsage(); u[type]=Number(u[type]||0)+Math.max(0,Number(count)||0);
+    if(type==='reads'&&docs?.length)u.bytesRead=Number(u.bytesRead||0)+docs.reduce((a,d)=>a+byteSize(d),0);
+    saveUsage(u);
+  }
+  function normalizeDocs(name,snap){ return snap.docs.map(d=>name==='users'?normalizeUser({id:d.id,...d.data()}):({id:d.id,...d.data()})); }
+  function replaceState(name,docs){ state[name]=docs; }
+  function mergeState(name,docs){ const m=new Map(state[name].map(x=>[x.id,x])); docs.forEach(x=>m.set(x.id,x)); state[name]=[...m.values()]; }
+  function listenScoped(key,name,source,{replace=false,predicate=null}={}){
+    refs[key]?.();
+    return new Promise(resolve=>{
+      let first=true;
+      refs[key]=source.onSnapshot(snap=>{
+        const docs=normalizeDocs(name,snap);
+        // En el primer snapshot se cobra por cada documento devuelto; después, por cada cambio.
+        const readCount=first?Math.max(1,snap.size):snap.docChanges().length; trackUsage('reads',readCount, first?docs:snap.docChanges().map(c=>({id:c.doc.id,...c.doc.data()})));
+        if(replace)replaceState(name,docs);
+        else if(predicate){ state[name]=state[name].filter(x=>!predicate(x)); mergeState(name,docs); }
+        else mergeState(name,docs);
+        first=false; resolve();
+        if(Auth?.isLoggedIn?.() && Router?.current) App?.requestRefresh?.();
+      },err=>{ console.error('Firestore '+name+':',err); try{Toast.show('Error cargando '+name+': '+(err.message||err),'error')}catch(_){} resolve(); });
+    });
+  }
+  async function fetchInto(name,source,{replace=false,cacheKey=null,ttl=300000}={}){
+    const key=cacheKey||name; const now=Date.now();
+    if(loadedAt[key] && now-loadedAt[key]<ttl) return {ok:true,cached:true};
+    try{ const snap=await source.get(); const docs=normalizeDocs(name,snap); trackUsage('reads',Math.max(1,snap.size),docs); replace?replaceState(name,docs):mergeState(name,docs); loadedAt[key]=now; return{ok:true,count:docs.length}; }
+    catch(e){ console.error('Carga '+name,e); return{ok:false,error:e.message}; }
+  }
+  function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
+  function monthStart(){ return usageDate().slice(0,7)+'-01'; }
+  async function loadData(){
+    const u=state.currentUser, d=usageDate(); if(!u)return;
+    if(coreLoadedFor===u.id && refs.productsLive && refs.todaySales && refs.openCash)return;
+    coreLoadedFor=u.id;
+    // Categorías cambian poco: una sola lectura por sesión, sin listener permanente.
+    const cats=fetchInto('categories',db.collection('categories'),{replace:true,cacheKey:'categories',ttl:1800000});
+    // Stock sí necesita tiempo real para evitar vender con una pantalla desactualizada.
+    const products=listenScoped('productsLive','products',db.collection('products'),{replace:true});
+    const saleQuery=u.role==='admin'?db.collection('sales').where('fecha','==',d):db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',d);
+    const sales=listenScoped('todaySales','sales',saleQuery,{predicate:x=>x.fecha===d&&(u.role==='admin'||x.empleadoId===u.id)});
+    const cashQuery=db.collection('cashSessions').where('usuarioId','==',u.id).where('estado','==','Abierta');
+    const cash=listenScoped('openCash','cashSessions',cashQuery,{predicate:x=>x.usuarioId===u.id&&x.estado==='Abierta'});
+    const tasks=[cats,products,sales,cash];
+    if(u.role==='admin') tasks.push(listenScoped('todayExpenses','expenses',db.collection('expenses').where('fecha','==',d),{predicate:x=>x.fecha===d}));
+    await Promise.all(tasks);
+  }
+  async function loadUsers(){ return fetchInto('users',db.collection('users'),{replace:true,cacheKey:'users',ttl:900000}); }
+  async function loadSalesHistory(){
+    const u=state.currentUser; if(!u)return; const start=daysAgo(31);
+    if(u.role==='admin') return fetchInto('sales',db.collection('sales').where('fecha','>=',start).orderBy('fecha','desc').limit(250),{cacheKey:'salesHistory',ttl:300000});
+    // Para empleados consultamos por días: evita descargar años de ventas y no requiere índices complejos.
+    if(loadedAt.salesHistory && Date.now()-loadedAt.salesHistory<300000)return{ok:true,cached:true};
+    for(let i=0;i<14;i++){ const date=daysAgo(i); await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000}); }
+    loadedAt.salesHistory=Date.now(); return{ok:true};
+  }
+  async function loadSalesForDate(date){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(String(date||'')))return{ok:false,error:'Fecha inválida'};
+    const u=state.currentUser; let q=db.collection('sales').where('fecha','==',date); if(u?.role!=='admin')q=q.where('empleadoId','==',u.id);
+    return fetchInto('sales',q,{cacheKey:'salesDate:'+date,ttl:600000});
+  }
+  async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(31)).orderBy('fecha','desc').limit(250),{cacheKey:'expensesHistory',ttl:300000}); }
+  async function loadMovements(){ return fetchInto('movements',db.collection('movements').where('fecha','>=',daysAgo(31)).orderBy('fecha','desc').limit(250),{cacheKey:'movements',ttl:300000}); }
+  async function loadCashHistory(){
+    const u=state.currentUser; if(!u)return;
+    if(u.role==='admin') return fetchInto('cashSessions',db.collection('cashSessions').where('fecha','>=',daysAgo(45)).orderBy('fecha','desc').limit(80),{cacheKey:'cashHistory',ttl:300000});
+    if(loadedAt.cashHistory && Date.now()-loadedAt.cashHistory<300000)return{ok:true,cached:true};
+    for(let i=0;i<14;i++){const date=daysAgo(i);await fetchInto('cashSessions',db.collection('cashSessions').where('usuarioId','==',u.id).where('fecha','==',date),{cacheKey:'cash:'+date,ttl:300000});}
+    loadedAt.cashHistory=Date.now(); return{ok:true};
+  }
+  async function preparePage(page){
+    if(!state.currentUser)return;
+    if(['empleados','movimientos','gastos'].includes(page))await loadUsers();
+    if(page==='empleados')return;
+    if(page==='movimientos')await loadMovements();
+    if(page==='gastos')await loadExpensesHistory();
+    if(page==='historial')await Promise.all([loadSalesHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
+    if(page==='caja')await loadCashHistory();
+    if(page==='reportes')await Promise.all([loadSalesHistory(),loadExpensesHistory()]);
+  }
+  function getUsageStats(){
+    const u=readUsage(); const groups=['users','categories','products','sales','movements','expenses','cashSessions'];
+    const docs=[]; groups.forEach(k=>state[k].forEach(x=>docs.push({collection:k,...x})));
+    const knownBytes=docs.reduce((a,d)=>a+byteSize(d),0);
+    return {...u,knownBytes,knownDocs:docs.length,limits:{...FREE_LIMITS},optimized:true};
+  }
+  let profilePromise=null, profileUid=null;
+  async function loadProfile(uid){
+    if(state.currentUser?.id===uid)return state.currentUser;
+    if(profilePromise&&profileUid===uid)return profilePromise;
+    profileUid=uid;
+    profilePromise=(async()=>{const d=await db.collection('users').doc(uid).get();trackUsage('reads',1,d.exists?[{id:d.id,...d.data()}]:[]);return d.exists?normalizeUser({id:uid,...d.data()}):null;})();
+    try{return await profilePromise;}finally{profilePromise=null;}
+  }
+  function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; validatedCashId=null;}
+  async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const profile=await loadProfile(u.uid); if(!profile){await fbAuth.signOut();resolve();return;} state.currentUser=profile; if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
+  async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const profile=await loadProfile(c.user.uid);if(!profile||!isActive(profile)){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=profile;await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
   async function logout(){stop();state.cart=[];state.currentUser=null;await fbAuth.signOut()}
-  async function audit(accion,detalle){if(!state.currentUser)return;const t=limaParts();await db.collection('audits').add({...t,accion,detalle,usuarioId:state.currentUser.id,usuarioNombre:`${state.currentUser.nombres||''} ${state.currentUser.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()})}
+  async function audit(accion,detalle){if(!state.currentUser)return;const t=limaParts();await db.collection('audits').add({...t,accion,detalle,usuarioId:state.currentUser.id,usuarioNombre:`${state.currentUser.nombres||''} ${state.currentUser.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});trackUsage('writes',1)}
   async function addUser(data){
     const email=String(data?.email||'').trim().toLowerCase(), password=String(data?.password||'');
     if(!email)return{ok:false,error:'Ingresa un correo válido'};
@@ -43,7 +145,7 @@ const Store = (() => {
       secondary=firebase.initializeApp(firebaseConfig,'userCreator-'+Date.now());
       const cred=await secondary.auth().createUserWithEmailAndPassword(email,password);
       const user={email,role:'empleado',nombres:String(data.nombres||'').trim(),apellidos:String(data.apellidos||'').trim(),dni:String(data.dni||'').trim(),telefono:String(data.telefono||'').trim(),estado:data.estado||'Activo'};
-      await db.collection('users').doc(cred.user.uid).set(user);
+      await db.collection('users').doc(cred.user.uid).set(user);trackUsage('writes',1);state.users.push({id:cred.user.uid,...user});
       await audit('CREAR_EMPLEADO',user.email);
       return{ok:true,user:{id:cred.user.uid,...user}};
     }catch(e){return{ok:false,error:e.message}}
@@ -51,7 +153,7 @@ const Store = (() => {
       if(secondary){try{await secondary.auth().signOut()}catch(_){} try{await secondary.delete()}catch(_){}}
     }
   }
-  async function updateUser(id,data){try{const u=getUser(id);if(!u)return{ok:false,error:'Usuario no encontrado'};const patch={nombres:data.nombres?.trim()??u.nombres,apellidos:data.apellidos?.trim()??u.apellidos,dni:data.dni?.trim()??u.dni,telefono:data.telefono?.trim()??u.telefono,estado:data.estado??u.estado};await db.collection('users').doc(id).update(patch);await audit('EDITAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
+  async function updateUser(id,data){try{const u=getUser(id);if(!u)return{ok:false,error:'Usuario no encontrado'};const patch={nombres:data.nombres?.trim()??u.nombres,apellidos:data.apellidos?.trim()??u.apellidos,dni:data.dni?.trim()??u.dni,telefono:data.telefono?.trim()??u.telefono,estado:data.estado??u.estado};await db.collection('users').doc(id).update(patch);trackUsage('writes',1);Object.assign(u,patch);await audit('EDITAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
   async function sendPasswordReset(id){
     try{
       const u=getUser(id); if(!u?.email)return{ok:false,error:'El empleado no tiene un correo válido'};
@@ -60,9 +162,9 @@ const Store = (() => {
       return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo enviar el enlace de restablecimiento'}}
   }
-  async function deleteUser(id){try{if(id===state.currentUser?.id)return{ok:false,error:'No puedes desactivar tu propia cuenta'};await db.collection('users').doc(id).update({estado:'Inactivo'});await audit('DESACTIVAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar el empleado'}}}
-  async function addCategory(nombre){const id=docId(),c={nombre:nombre.trim(),estado:'Activo'};await db.collection('categories').doc(id).set(c);await audit('CREAR_CATEGORIA',c.nombre);return{ok:true,category:{id,...c}}}
-  async function updateCategory(id,data){await db.collection('categories').doc(id).update(clean(data));await audit('EDITAR_CATEGORIA',id);return{ok:true}}
+  async function deleteUser(id){try{if(id===state.currentUser?.id)return{ok:false,error:'No puedes desactivar tu propia cuenta'};await db.collection('users').doc(id).update({estado:'Inactivo'});trackUsage('writes',1);const u=getUser(id);if(u)u.estado='Inactivo';await audit('DESACTIVAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar el empleado'}}}
+  async function addCategory(nombre){const id=docId(),c={nombre:nombre.trim(),estado:'Activo'};await db.collection('categories').doc(id).set(c);trackUsage('writes',1);state.categories.push({id,...c});await audit('CREAR_CATEGORIA',c.nombre);return{ok:true,category:{id,...c}}}
+  async function updateCategory(id,data){await db.collection('categories').doc(id).update(clean(data));trackUsage('writes',1);const c=getCategory(id);if(c)Object.assign(c,clean(data));await audit('EDITAR_CATEGORIA',id);return{ok:true}}
   async function deleteCategory(id){
     try{
       if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar categorías'};
@@ -78,13 +180,13 @@ const Store = (() => {
         tx.set(archive,{...snap.data(),originalId:id,eliminadoFecha:t.fecha,eliminadoHora:t.hora,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
         tx.delete(ref);
       });
-      state.categories=state.categories.filter(x=>x.id!==id);
+      trackUsage('writes',1);trackUsage('deletes',1);state.categories=state.categories.filter(x=>x.id!==id);
       try{await audit('ELIMINAR_CATEGORIA',`${id}: ${c.nombre||''}`)}catch(err){console.warn('Auditoría categoría eliminada:',err)}
       return{ok:true};
     }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió eliminar la categoría. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo eliminar la categoría')}}
   }
-  async function addProduct(data){const id=docId(),stock=Number(data.stock)||0,t=limaParts();const p={nombre:data.nombre.trim(),categoriaId:data.categoriaId,precioCompra:Number(data.precioCompra),precioVenta:Number(data.precioVenta),stock,stockMinimo:Number(data.stockMinimo)||0,descripcion:(data.descripcion||'').trim(),imagen:data.imagen||'📦',estado:data.estado||'Activo'};const b=db.batch();b.set(db.collection('products').doc(id),p);if(stock>0){const mid=docId();b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});}await b.commit();await audit('CREAR_PRODUCTO',p.nombre);return{ok:true,product:{id,...p}}}
-  async function updateProduct(id,data){const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};const patch={nombre:data.nombre?.trim()??p.nombre,categoriaId:data.categoriaId??p.categoriaId,precioCompra:Number(data.precioCompra??p.precioCompra),precioVenta:Number(data.precioVenta??p.precioVenta),stockMinimo:Number(data.stockMinimo??p.stockMinimo),descripcion:data.descripcion?.trim()??p.descripcion,imagen:data.imagen||p.imagen,estado:data.estado||p.estado};await db.collection('products').doc(id).update(patch);await audit('EDITAR_PRODUCTO',p.nombre);return{ok:true}}
+  async function addProduct(data){const id=docId(),stock=Number(data.stock)||0,t=limaParts();const p={nombre:data.nombre.trim(),categoriaId:data.categoriaId,precioCompra:Number(data.precioCompra),precioVenta:Number(data.precioVenta),stock,stockMinimo:Number(data.stockMinimo)||0,descripcion:(data.descripcion||'').trim(),imagen:data.imagen||'📦',estado:data.estado||'Activo'};const b=db.batch();b.set(db.collection('products').doc(id),p);if(stock>0){const mid=docId();b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});}await b.commit();trackUsage('writes',1+(stock>0?1:0)+(stock>0&&p.precioCompra>0?1:0));if(!state.products.some(x=>x.id===id))state.products.push({id,...p});await audit('CREAR_PRODUCTO',p.nombre);return{ok:true,product:{id,...p}}}
+  async function updateProduct(id,data){const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};const patch={nombre:data.nombre?.trim()??p.nombre,categoriaId:data.categoriaId??p.categoriaId,precioCompra:Number(data.precioCompra??p.precioCompra),precioVenta:Number(data.precioVenta??p.precioVenta),stockMinimo:Number(data.stockMinimo??p.stockMinimo),descripcion:data.descripcion?.trim()??p.descripcion,imagen:data.imagen||p.imagen,estado:data.estado||p.estado};await db.collection('products').doc(id).update(patch);trackUsage('writes',1);Object.assign(p,patch);await audit('EDITAR_PRODUCTO',p.nombre);return{ok:true}}
   async function deleteProduct(id){
     try{
       if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar productos'};
@@ -97,6 +199,7 @@ const Store = (() => {
         if(stockAlEliminar>0)tx.set(db.collection('movements').doc(),{...t,productoId:id,productoNombre:data.nombre||'',tipo:'Eliminación',cantidad:stockAlEliminar,stockAnterior:stockAlEliminar,stockNuevo:0,usuarioId:state.currentUser.id,motivo:'Producto eliminado del catálogo'});
         tx.delete(ref);
       });
+      trackUsage('writes',1+(Number(p.stock||0)>0?1:0));trackUsage('deletes',1);
       state.products=state.products.filter(x=>x.id!==id);
       state.cart=state.cart.filter(x=>x.productoId!==id);
       try{await audit('ELIMINAR_PRODUCTO',`${id}: ${p.nombre||''}`)}catch(err){console.warn('Auditoría producto eliminado:',err)}
@@ -108,9 +211,11 @@ const Store = (() => {
   function updateCartQty(id,c){const p=getProduct(id);if(!p)return{ok:false};if(c<=0)state.cart=state.cart.filter(x=>x.productoId!==id);else{if(c>p.stock)return{ok:false,error:`Máximo ${p.stock} unidades`};const i=state.cart.find(x=>x.productoId===id);if(i)i.cantidad=c;}return{ok:true}}
   function removeFromCart(id){state.cart=state.cart.filter(x=>x.productoId!==id)} function clearCart(){state.cart=[]}
   function getCartTotal(){return state.cart.reduce((s,i)=>s+(getProduct(i.productoId)?.precioVenta||0)*i.cantidad,0)}
+  let validatedCashId=null;
   async function ensureCashLock(caja){
     const u=state.currentUser;
     if(!u||!caja?.id)return{ok:false,error:'Caja inválida'};
+    if(validatedCashId===caja.id)return{ok:true};
     const lockRef=db.collection('cashLocks').doc(u.id);
     try{
       await db.runTransaction(async tx=>{
@@ -123,10 +228,10 @@ const Store = (() => {
         if(otherCashSnap?.exists && otherCashSnap.data().estado==='Abierta')throw Error('Existe otra caja abierta vinculada a tu usuario');
         tx.set(lockRef,{usuarioId:u.id,cajaId:caja.id,estado:'Abierta',fecha:caja.fecha||today(),hora:caja.hora||limaParts().hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
-      return{ok:true};
+      trackUsage('reads',1);trackUsage('writes',1);validatedCashId=caja.id;return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo validar la caja activa'}}
   }
-  async function confirmSale(metodoPago){if(!state.cart.length)return{ok:false,error:'Carrito vacío'};if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};const hoy=today();const caja=state.cashSessions.find(x=>x.usuarioId===state.currentUser.id&&x.estado==='Abierta'&&x.fecha===hoy);if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};const lock=await ensureCashLock(caja);if(!lock.ok)return lock;const saleRef=db.collection('sales').doc();try{await db.runTransaction(async tx=>{const snaps=[];for(const i of state.cart)snaps.push([i,await tx.get(db.collection('products').doc(i.productoId))]);const items=[];let total=0,costo=0;for(const [i,s] of snaps){if(!s.exists||s.data().stock<i.cantidad)throw Error(`Stock insuficiente para ${s.data()?.nombre||'producto'}`);const p=s.data(),sub=p.precioVenta*i.cantidad;items.push({productoId:s.id,nombre:p.nombre,cantidad:i.cantidad,precioUnitario:p.precioVenta,costoUnitario:p.precioCompra,subtotal:sub});total+=sub;costo+=p.precioCompra*i.cantidad;tx.update(s.ref,{stock:p.stock-i.cantidad});const t=limaParts();tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:p.nombre,tipo:'Venta',cantidad:i.cantidad,stockAnterior:p.stock,stockNuevo:p.stock-i.cantidad,usuarioId:state.currentUser.id,motivo:`Venta ${saleRef.id}`});}const t=limaParts();tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:state.currentUser.id,empleadoNombre:`${state.currentUser.nombres} ${state.currentUser.apellidos}`,cajaId:caja.id,items,total:+total.toFixed(2),costoTotal:+costo.toFixed(2),metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});});state.cart=[];await audit('VENTA',saleRef.id);return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}}}catch(e){return{ok:false,error:e.message}}}
+  async function confirmSale(metodoPago){if(!state.cart.length)return{ok:false,error:'Carrito vacío'};if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};const hoy=today();const caja=state.cashSessions.find(x=>x.usuarioId===state.currentUser.id&&x.estado==='Abierta'&&x.fecha===hoy);if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};const lock=await ensureCashLock(caja);if(!lock.ok)return lock;const saleRef=db.collection('sales').doc();try{await db.runTransaction(async tx=>{const snaps=[];for(const i of state.cart)snaps.push([i,await tx.get(db.collection('products').doc(i.productoId))]);const items=[];let total=0,costo=0;for(const [i,s] of snaps){if(!s.exists||s.data().stock<i.cantidad)throw Error(`Stock insuficiente para ${s.data()?.nombre||'producto'}`);const p=s.data(),sub=p.precioVenta*i.cantidad;items.push({productoId:s.id,nombre:p.nombre,cantidad:i.cantidad,precioUnitario:p.precioVenta,costoUnitario:p.precioCompra,subtotal:sub});total+=sub;costo+=p.precioCompra*i.cantidad;tx.update(s.ref,{stock:p.stock-i.cantidad});const t=limaParts();tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:p.nombre,tipo:'Venta',cantidad:i.cantidad,stockAnterior:p.stock,stockNuevo:p.stock-i.cantidad,usuarioId:state.currentUser.id,motivo:`Venta ${saleRef.id}`});}const t=limaParts();tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:state.currentUser.id,empleadoNombre:`${state.currentUser.nombres} ${state.currentUser.apellidos}`,cajaId:caja.id,items,total:+total.toFixed(2),costoTotal:+costo.toFixed(2),metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});});trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);state.cart=[];await audit('VENTA',saleRef.id);return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}}}catch(e){return{ok:false,error:e.message}}}
   async function cancelSale(id,motivo='Sin motivo'){
     motivo=String(motivo||'').trim(); if(!motivo)return{ok:false,error:'Debes indicar el motivo de anulación'};
     if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede anular ventas'};
@@ -216,7 +321,7 @@ const Store = (() => {
     const t=limaParts();
     const payload={...t,concepto,categoria,monto:+monto.toFixed(2),origen:'Manual',usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()};
     try{
-      const ref=await db.collection('expenses').add(payload);
+      const ref=await db.collection('expenses').add(payload);trackUsage('writes',1);
       if(!state.expenses.some(e=>e.id===ref.id))state.expenses.push({id:ref.id,...payload});
       try{await audit('REGISTRAR_GASTO',`${concepto} · S/${monto.toFixed(2)}`)}catch(err){console.warn('Auditoría gasto:',err)}
       return{ok:true,id:ref.id};
@@ -234,18 +339,7 @@ const Store = (() => {
     if(!u)return{ok:false,error:'Sesión no válida'};
     if(state.cashSessions.some(x=>x.usuarioId===u.id&&x.estado==='Abierta'))return{ok:false,error:'Ya tienes una caja abierta'};
 
-    // Compatibilidad con sesiones creadas antes de v26: comprobar Firestore directamente
-    // antes de intentar crear el bloqueo transaccional.
-    try{
-      const existing=await db.collection('cashSessions').where('usuarioId','==',u.id).get();
-      const openDoc=existing.docs.find(d=>d.data().estado==='Abierta');
-      if(openDoc){
-        if(!state.cashSessions.some(x=>x.id===openDoc.id))state.cashSessions.push({id:openDoc.id,...openDoc.data()});
-        return{ok:false,error:'Ya tienes una caja abierta. Cierra esa sesión antes de abrir otra'};
-      }
-    }catch(e){
-      console.warn('Verificación previa de caja:',e);
-    }
+    // El listener de caja abierta ya confirmó el estado actual sin releer el historial.
 
     const ref=db.collection('cashSessions').doc(), cashId=ref.id;
     const lockRef=db.collection('cashLocks').doc(u.id);
@@ -262,8 +356,9 @@ const Store = (() => {
         tx.set(ref,payload);
         tx.set(lockRef,{usuarioId:u.id,cajaId:cashId,estado:'Abierta',fecha:t.fecha,hora:t.hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
+      trackUsage('reads',1);trackUsage('writes',2);
       if(!state.cashSessions.some(x=>x.id===cashId))state.cashSessions.push({id:cashId,...t,usuarioId:u.id,usuarioNombre:payload.usuarioNombre,montoInicial:+initial.toFixed(2),estado:'Abierta'});
-      try{await audit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
+      validatedCashId=cashId;try{await audit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
       return{ok:true,id:cashId};
     }catch(e){
       return{ok:false,error:e?.code==='permission-denied'?'No se pudo abrir la caja. Publica las reglas Firestore incluidas en esta versión.':(e.message||'No se pudo abrir la caja')}
@@ -275,9 +370,13 @@ const Store = (() => {
     const u=state.currentUser,c=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta');
     if(!c)return{ok:false,error:'No hay caja abierta'};
     try{
-      // Se consulta Firestore directamente: el cierre no depende de que el listener local ya se haya actualizado.
-      const qs=await db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',c.id).get();
-      const ventas=qs.docs.map(d=>({id:d.id,...d.data()})).filter(s=>s.estado!=='Anulada');
+      // La venta del día ya está sincronizada por el listener; reutilizarla evita releer toda la caja al cerrar.
+      let ventas=state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===c.id&&s.estado!=='Anulada');
+      if(!refs.todaySales || c.fecha!==today()){
+        const qs=await db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',c.id).get();
+        ventas=qs.docs.map(d=>({id:d.id,...d.data()})).filter(s=>s.estado!=='Anulada');
+        trackUsage('reads',qs.size,ventas);
+      }
       const sum=m=>ventas.filter(s=>String(s.metodoPago||'').trim().toLowerCase()===m.toLowerCase()).reduce((a,b)=>a+Number(b.total||0),0);
       const efectivo=sum('Efectivo'),yape=sum('Yape'),plin=sum('Plin'),tarjeta=sum('Tarjeta');
       const totalVentasDia=efectivo+yape+plin+tarjeta,esperado=Number(c.montoInicial||0)+efectivo,dif=real-esperado,t=limaParts();
@@ -288,11 +387,11 @@ const Store = (() => {
         if(!snap.exists||snap.data().estado!=='Abierta')throw Error('La caja ya no está abierta');
         tx.update(ref,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2),closedAt:firebase.firestore.FieldValue.serverTimestamp()});
         if(lockSnap.exists && lockSnap.data().cajaId===c.id)tx.delete(lockRef);
-      });
+      });trackUsage('reads',2);trackUsage('writes',1);trackUsage('deletes',1);
       const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2)});
-      await audit('CERRAR_CAJA',`Ventas día S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
+      validatedCashId=null;await audit('CERRAR_CAJA',`Ventas día S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
       return{ok:true,diferencia:dif,totalVentasDia};
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),audit};
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,getUsageStats,audit};
 })();

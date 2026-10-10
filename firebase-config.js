@@ -12,3 +12,10 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const fbAuth = firebase.auth();
+
+
+// Caché persistente local: mejora el arranque y permite reutilizar datos ya descargados.
+// Firestore sincroniza los cambios necesarios cuando vuelve a haber conexión.
+db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+  if (err?.code !== 'failed-precondition' && err?.code !== 'unimplemented') console.warn('Persistencia Firestore:', err);
+});

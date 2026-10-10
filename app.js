@@ -18,7 +18,7 @@ const Router = {
     inicio: () => Pages.dashboardEmployee()
   },
 
-  go(page, options = {}) {
+  async go(page, options = {}) {
     if (!Auth.isLoggedIn()) {
       App.showLogin();
       return;
@@ -34,6 +34,11 @@ const Router = {
     const previousScrollY = window.scrollY || 0;
     const renderer = this.routes[page] || this.routes.dashboard;
     const main = document.getElementById('main-content');
+    // Carga diferida: solo consultar las colecciones necesarias para la pantalla abierta.
+    if (Store.preparePage) {
+      main.innerHTML = `<div class="ux-data-loading"><div class="spinner-border spinner-border-sm" role="status"></div><span>Cargando datos necesarios…</span></div>`;
+      try { await Store.preparePage(page); } catch (e) { console.warn('Carga diferida:', e); }
+    }
     main.innerHTML = renderer();
     this.makeTablesMobileFriendly(main);
     if (typeof Pages !== 'undefined' && Pages.initPagination) Pages.initPagination(page);

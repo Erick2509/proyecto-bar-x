@@ -1309,3 +1309,17 @@ select option { background:#1c1a16; color:#f7f3ed; }
 .product-icon-option[hidden],.product-icon-section[hidden]{display:none!important}.product-icon-empty{padding:1rem;text-align:center;color:#bdb3a5;font-size:.82rem;border:1px dashed #484137;border-radius:10px}
 @media(max-width:640px){.product-icon-picker{padding:.72rem}.product-icon-current{align-items:flex-start}.product-icon-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:.34rem}.product-icon-option{font-size:1.25rem}.product-icon-scroll{max-height:245px}.product-icon-custom{grid-template-columns:74px minmax(0,1fr)}}
 @media(max-width:390px){.product-icon-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+
+
+/* ===== FIREBASE USAGE / OPTIMIZATION v29 ===== */
+.ux-data-loading{min-height:180px;display:flex;align-items:center;justify-content:center;gap:.7rem;color:var(--text-muted);font-weight:600}
+.ux-usage-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.ux-usage-card{padding:1.15rem}
+.ux-usage-item{padding:.85rem 0;border-bottom:1px solid var(--border)}
+.ux-usage-item:last-of-type{border-bottom:0}
+.ux-usage-top{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:.5rem}.ux-usage-top span{font-weight:600}.ux-usage-top strong{font-variant-numeric:tabular-nums}
+.ux-meter{height:10px;border-radius:999px;background:rgba(148,163,184,.16);overflow:hidden}.ux-meter>span{display:block;height:100%;min-width:2px;border-radius:inherit;background:linear-gradient(90deg,#22c55e,#eab308,#ef4444)}
+.ux-meter-storage>span{background:linear-gradient(90deg,#38bdf8,#8b5cf6)}
+.ux-usage-item small,.ux-storage-meta{color:var(--text-muted);font-size:.78rem}.ux-usage-note{margin:1rem 0;padding:.8rem;border:1px solid var(--border);border-radius:10px;background:rgba(148,163,184,.07);font-size:.82rem;line-height:1.45;color:var(--text-muted)}
+.ux-storage-number{display:flex;align-items:end;gap:.55rem;margin:1rem 0 .75rem}.ux-storage-number strong{font-size:2rem;line-height:1;color:var(--amber)}.ux-storage-number span{color:var(--text-muted);font-size:.85rem}.ux-storage-meta{display:flex;justify-content:space-between;gap:1rem;margin-top:.55rem}.ux-opt-list{display:grid;gap:.6rem}.ux-opt-list span{padding:.55rem .7rem;border-radius:9px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.16)}
+@media(max-width:900px){.ux-usage-grid{grid-template-columns:1fr}.ux-usage-top{align-items:flex-start;flex-direction:column;gap:.2rem}.ux-storage-meta{flex-direction:column;gap:.2rem}}

@@ -109,3 +109,6 @@ Publica el archivo `firestore.rules` de esta versión antes de probar apertura d
 - Filtros por categoría y búsqueda por palabras como cerveza, comida, promoción, bebida, etc.
 - Compatible con iconos personalizados escritos manualmente.
 - Diseño responsive para celular y escritorio.
+
+## v29 — Optimización de Firestore
+Esta versión reduce las lecturas cargando en tiempo real solo los datos operativos necesarios (stock, ventas del día, gastos del día y caja abierta). Los historiales se cargan bajo demanda y con límites. Configuración incluye un monitor preventivo de consumo local y acceso al panel oficial de Firebase. Ver `PRUEBAS_V29.md`.

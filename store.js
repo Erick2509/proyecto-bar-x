@@ -22,25 +22,14 @@ const Store = (() => {
   function getUser(id){return state.users.find(x=>x.id===id)}
   function stockStatus(p){return p.stock<=0?'agotado':p.stock<=p.stockMinimo?'bajo':'normal'}
   function lowStockProducts(){return state.products.filter(p=>p.estado==='Activo'&&p.stock<=p.stockMinimo)}
-  // ===== OPTIMIZACIÓN FIRESTORE v29 =====
+  // ===== OPTIMIZACIÓN FIRESTORE v30 =====
   // Solo mantenemos listeners en datos que realmente necesitan tiempo real. Los historiales
   // se consultan bajo demanda y con límites para evitar descargar toda la base en cada inicio.
   const loadedAt = {};
   let coreLoadedFor = null;
-  const FREE_LIMITS = {reads:50000,writes:20000,deletes:20000,storageBytes:1073741824};
-  const encoder = typeof TextEncoder!=='undefined' ? new TextEncoder() : null;
+  // v30: se retiró el monitor local anterior. trackUsage queda como no-op por compatibilidad interna.
   function usageDate(){ return limaParts().fecha; }
-  function usageKey(){ return `px_firestore_usage_${usageDate()}`; }
-  function readUsage(){
-    try{ return {...{date:usageDate(),reads:0,writes:0,deletes:0,bytesRead:0},...JSON.parse(localStorage.getItem(usageKey())||'{}')}; }catch(_){ return {date:usageDate(),reads:0,writes:0,deletes:0,bytesRead:0}; }
-  }
-  function saveUsage(u){ try{localStorage.setItem(usageKey(),JSON.stringify(u));}catch(_){} }
-  function byteSize(v){ try{const str=JSON.stringify(v??{});return encoder?encoder.encode(str).length:unescape(encodeURIComponent(str)).length;}catch(_){return 0;} }
-  function trackUsage(type,count=1,docs=[]){
-    const u=readUsage(); u[type]=Number(u[type]||0)+Math.max(0,Number(count)||0);
-    if(type==='reads'&&docs?.length)u.bytesRead=Number(u.bytesRead||0)+docs.reduce((a,d)=>a+byteSize(d),0);
-    saveUsage(u);
-  }
+  function trackUsage(){ /* intencionalmente vacío */ }
   function normalizeDocs(name,snap){ return snap.docs.map(d=>name==='users'?normalizeUser({id:d.id,...d.data()}):({id:d.id,...d.data()})); }
   function replaceState(name,docs){ state[name]=docs; }
   function mergeState(name,docs){ const m=new Map(state[name].map(x=>[x.id,x])); docs.forEach(x=>m.set(x.id,x)); state[name]=[...m.values()]; }
@@ -116,12 +105,6 @@ const Store = (() => {
     if(page==='historial')await Promise.all([loadSalesHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
     if(page==='caja')await loadCashHistory();
     if(page==='reportes')await Promise.all([loadSalesHistory(),loadExpensesHistory()]);
-  }
-  function getUsageStats(){
-    const u=readUsage(); const groups=['users','categories','products','sales','movements','expenses','cashSessions'];
-    const docs=[]; groups.forEach(k=>state[k].forEach(x=>docs.push({collection:k,...x})));
-    const knownBytes=docs.reduce((a,d)=>a+byteSize(d),0);
-    return {...u,knownBytes,knownDocs:docs.length,limits:{...FREE_LIMITS},optimized:true};
   }
   let profilePromise=null, profileUid=null;
   async function loadProfile(uid){
@@ -393,5 +376,79 @@ const Store = (() => {
       return{ok:true,diferencia:dif,totalVentasDia};
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,getUsageStats,audit};
+
+  // ===== REINICIO TOTAL DEL SISTEMA v30 =====
+  // Esta clave es una segunda confirmación de interfaz. La autorización real sigue siendo
+  // el rol ADMIN de Firebase/Firestore. Al estar en una app web, la clave puede verse en el código.
+  const RESET_PASSWORD = 'adminadmin';
+
+  async function purgeCollection(name, preserveId = null) {
+    let deleted = 0;
+    // Batches de 400 para mantenernos por debajo del máximo de 500 operaciones de Firestore.
+    for (let round = 0; round < 1000; round++) {
+      const snap = await db.collection(name).limit(400).get();
+      if (snap.empty) break;
+      const targets = snap.docs.filter(d => !preserveId || d.id !== preserveId);
+      if (!targets.length) break;
+      const batch = db.batch();
+      targets.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      deleted += targets.length;
+      if (snap.size < 400) break;
+    }
+    return deleted;
+  }
+
+  async function resetSystem(password) {
+    const u = state.currentUser;
+    if (!u || u.role !== 'admin') return {ok:false,error:'Solo el administrador puede reiniciar el sistema'};
+    if (String(password || '') !== RESET_PASSWORD) return {ok:false,error:'Contraseña de reinicio incorrecta'};
+
+    const adminId = u.id;
+    const counts = {};
+    // Detener listeners evita que la interfaz se repinte doc por doc durante el borrado.
+    stop();
+    try {
+      const collections = [
+        'cashLocks','cashSessions','sales','expenses','movements',
+        'products','deletedProducts','categories','deletedCategories','audits'
+      ];
+      for (const name of collections) counts[name] = await purgeCollection(name);
+      // Conservar únicamente el perfil del administrador conectado para no perder el acceso.
+      counts.users = await purgeCollection('users', adminId);
+
+      state.users = [u];
+      state.categories = [];
+      state.products = [];
+      state.sales = [];
+      state.movements = [];
+      state.expenses = [];
+      state.cashSessions = [];
+      state.audits = [];
+      state.cart = [];
+      validatedCashId = null;
+      Object.keys(loadedAt).forEach(k => delete loadedAt[k]);
+      coreLoadedFor = null;
+
+      // Quitar restos del antiguo medidor local de v29, si existieran.
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('px_firestore_usage_')) localStorage.removeItem(key);
+        }
+      } catch (_) {}
+
+      await loadData();
+      return {ok:true,counts,employeeProfilesDeleted:counts.users || 0};
+    } catch (e) {
+      console.error('Reinicio del sistema:', e);
+      // Intentar recuperar listeners aun si una colección falló a mitad del proceso.
+      try { coreLoadedFor = null; await loadData(); } catch (_) {}
+      return {ok:false,error:e?.code==='permission-denied'
+        ? 'Firestore rechazó el reinicio. Publica las reglas v30 antes de usar esta función.'
+        : (e.message || 'No se pudo reiniciar completamente el sistema')};
+    }
+  }
+
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
 })();

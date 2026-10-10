@@ -14,7 +14,8 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if admin() || (active() && uid == request.auth.uid);
       allow create, update: if admin();
-      allow delete: if false;
+      // v30: el administrador puede borrar perfiles de empleados durante el reinicio, nunca el suyo.
+      allow delete: if admin() && uid != request.auth.uid;
     }
     match /categories/{id} {
       allow read: if active();
@@ -24,7 +25,7 @@ service cloud.firestore {
       // Archivo técnico: la categoría desaparece del catálogo, pero queda una copia
       // para conservar trazabilidad de eliminaciones administrativas.
       allow read, create, update: if admin();
-      allow delete: if false;
+      allow delete: if admin();
     }
     match /products/{id} {
       allow read: if active();
@@ -41,7 +42,7 @@ service cloud.firestore {
       // Los productos eliminados salen de /products y no vuelven a ventas/inventario.
       // El archivo permite mantener integridad si después se anula una venta histórica.
       allow read, create, update: if admin();
-      allow delete: if false;
+      allow delete: if admin();
     }
     match /sales/{id} {
       allow read: if admin() || (active() && resource.data.empleadoId == request.auth.uid);
@@ -66,7 +67,7 @@ service cloud.firestore {
         && request.resource.data.items is list
         && request.resource.data.items.size() > 0;
       allow update: if admin();
-      allow delete: if false;
+      allow delete: if admin();
     }
     match /movements/{id} {
       allow read: if admin();
@@ -76,7 +77,8 @@ service cloud.firestore {
         && positiveNumber(request.resource.data.cantidad)
         && positiveNumber(request.resource.data.stockNuevo)
         && request.resource.data.stockNuevo < request.resource.data.stockAnterior);
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if admin();
     }
     match /expenses/{id} {
       allow read, create, update, delete: if admin();
@@ -130,12 +132,13 @@ service cloud.firestore {
           && request.resource.data.usuarioId == resource.data.usuarioId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','diferencia','ajustePorAnulacion','ultimaAnulacionId','ultimaAnulacionFecha','ultimaAnulacionHora']))
       );
-      allow delete: if false;
+      allow delete: if admin();
     }
     match /audits/{id} {
       allow read: if admin();
       allow create: if active() && request.resource.data.usuarioId == request.auth.uid;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if admin();
     }
     match /{document=**} { allow read, write: if false; }
   }

@@ -111,4 +111,12 @@ Publica el archivo `firestore.rules` de esta versión antes de probar apertura d
 - Diseño responsive para celular y escritorio.
 
 ## v29 — Optimización de Firestore
-Esta versión reduce las lecturas cargando en tiempo real solo los datos operativos necesarios (stock, ventas del día, gastos del día y caja abierta). Los historiales se cargan bajo demanda y con límites. Configuración incluye un monitor preventivo de consumo local y acceso al panel oficial de Firebase. Ver `PRUEBAS_V29.md`.
+Esta versión reduce las lecturas cargando en tiempo real solo los datos operativos necesarios (stock, ventas del día, gastos del día y caja abierta). Los historiales se cargan bajo demanda y con límites.
+
+
+## v30 - Reinicio y puesta en marcha
+- Configuración simplificada para entrega y puesta en marcha.
+- Reinicio total protegido por contraseña.
+- Tutorial inicial con apartados bloqueados/desbloqueados por requisitos.
+- El administrador conectado se conserva durante el reinicio.
+- Ver `GUIA_INICIO_V30.md`.

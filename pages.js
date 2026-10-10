@@ -1171,6 +1171,7 @@ const Pages = {
   async _confirmPagoNow(method) {
     const res = await Store.confirmSale(method);
     if (!res.ok) { Toast.show(res.error, 'error'); return res; }
+    SetupGuide.mark('saleDone');
     Modal.close();
     App.updateCartBadge();
     // Show success
@@ -1418,49 +1419,127 @@ const Pages = {
         </div>
       </div>`;
   },
-  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
+  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){SetupGuide.mark('cashOpened');Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
   closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
   reportes(){if(!Auth.requireAdmin())return '';const desde=(()=>{const d=new Date();d.setDate(d.getDate()-31);return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d)})();const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),exp=Store.state.expenses.filter(e=>e.fecha>=desde),gastos=exp.reduce((a,b)=>a+Number(b.monto||0),0),util=ventas-costo-gastos;const by={};sales.forEach(s=>by[s.metodoPago]=(by[s.metodoPago]||0)+Number(s.total||0));return `<div class="page-header"><div><h1 class="page-title">📈 Reportes</h1><p class="ux-page-sub">Resumen optimizado de los últimos 31 días · máximo 250 documentos por historial.</p></div></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>Ventas por método</h5>${Object.entries(by).map(([k,v])=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(v)}</strong></div>`).join('')||'Sin ventas'}</div>`},
   async anularVenta(id){const motivo=prompt('Motivo de anulación:')?.trim();if(!motivo)return;confirmAction('La venta será anulada y el stock será devuelto. Esta acción no debe repetirse. ¿Confirmar?',async()=>{const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('historial')}return r;},{title:'Anular venta',confirmText:'Anular venta',danger:true,key:'cancel-sale:'+id})}
 ,
   configuracion() {
     if (!Auth.requireAdmin()) return '';
-    const u = Auth.currentUser() || {}, m = Store.getUsageStats ? Store.getUsageStats() : {reads:0,writes:0,deletes:0,knownBytes:0,knownDocs:0,limits:{reads:50000,writes:20000,deletes:20000,storageBytes:1073741824}};
-    const pct=(v,max)=>Math.min(100,Math.max(0,(Number(v||0)/max)*100));
-    const fmtBytes=(n)=>{n=Number(n||0);if(n<1024)return `${n} B`;if(n<1048576)return `${(n/1024).toFixed(1)} KB`;if(n<1073741824)return `${(n/1048576).toFixed(2)} MB`;return `${(n/1073741824).toFixed(3)} GB`;};
-    const readPct=pct(m.reads,m.limits.reads), writePct=pct(m.writes,m.limits.writes), deletePct=pct(m.deletes,m.limits.deletes), storagePct=pct(m.knownBytes,m.limits.storageBytes);
-    const meter=(label,value,max,p,sub)=>`<div class="ux-usage-item"><div class="ux-usage-top"><span>${label}</span><strong>${value.toLocaleString('es-PE')} / ${max.toLocaleString('es-PE')}</strong></div><div class="ux-meter"><span style="width:${p.toFixed(2)}%"></span></div><small>${p.toFixed(2)}% · ${sub}</small></div>`;
-    return `<div class="page-header"><div><h1 class="page-title">⚙️ Configuración</h1><p class="ux-page-sub">Estado del sistema y consumo preventivo de Firebase.</p></div></div>
-      <div class="ux-usage-grid">
-        <div class="card ux-usage-card">
-          <div class="ux-section-head"><div><h3>🔥 Uso de Firestore hoy</h3><p>Estimación registrada por este navegador/PWA.</p></div><span class="badge badge-success">Optimización activa</span></div>
-          ${meter('Lecturas estimadas',m.reads,m.limits.reads,readPct,'cuota gratuita diaria de Firestore Standard')}
-          ${meter('Escrituras estimadas',m.writes,m.limits.writes,writePct,'cuota gratuita diaria')}
-          ${meter('Eliminaciones estimadas',m.deletes,m.limits.deletes,deletePct,'cuota gratuita diaria')}
-          <div class="ux-usage-note">ℹ️ Firebase no entrega al navegador el contador facturado global de todos los dispositivos. Este panel cuenta las operaciones realizadas por esta instalación. Para el valor oficial usa el panel de Firebase.</div>
-          <a class="btn btn-secondary" target="_blank" rel="noopener" href="https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/-default-/usage">Abrir consumo oficial de Firebase ↗</a>
-        </div>
-        <div class="card ux-usage-card">
-          <div class="ux-section-head"><div><h3>💾 Almacenamiento Firestore</h3><p>Cuota total gratuita y datos conocidos por la app.</p></div></div>
-          <div class="ux-storage-number"><strong>${fmtBytes(m.knownBytes)}</strong><span>de 1 GB gratuito</span></div>
-          <div class="ux-meter ux-meter-storage"><span style="width:${storagePct.toFixed(4)}%"></span></div>
-          <div class="ux-storage-meta"><span>${m.knownDocs} documentos cargados</span><span>${storagePct.toFixed(4)}% mínimo conocido</span></div><div class="ux-storage-meta"><span>Datos leídos hoy por esta instalación</span><strong>${fmtBytes(m.bytesRead||0)}</strong></div>
-          <div class="ux-usage-note">El tamaño mostrado es una <strong>estimación mínima</strong> de los documentos que esta app ya conoce. El almacenamiento real de Firestore también incluye índices, metadatos y documentos históricos no descargados. El total oficial se consulta en Firebase/Google Cloud.</div>
-        </div>
+    const u = Auth.currentUser() || {};
+    const setup = SetupGuide.snapshot();
+    const active = SetupGuide.isActive();
+    const step = (num, icon, title, desc, done, enabled, page, optional=false) => `
+      <div class="setup-step ${done ? 'done' : (enabled ? 'current' : 'locked')}">
+        <div class="setup-step-num">${done ? '✓' : num}</div>
+        <div class="setup-step-body"><div class="setup-step-title">${icon} ${title}${optional ? ' <span class="setup-optional">Opcional</span>' : ''}</div><div class="setup-step-desc">${desc}</div></div>
+        <div class="setup-step-action">${done ? '<span class="badge badge-success">Listo</span>' : (enabled ? `<button class="btn btn-sm btn-secondary" onclick="Router.go('${page}')">Ir ahora</button>` : '<span class="setup-lock-pill">🔒 Bloqueado</span>')}</div>
+      </div>`;
+
+    const tutorialHtml = active ? `
+      <div class="setup-progress-head"><div><strong>Configuración guiada activa</strong><p>Los apartados se habilitan a medida que completas lo necesario.</p></div><span class="badge badge-warning">MODO INICIO</span></div>
+      <div class="setup-steps">
+        ${step(1,'📂','Crear categorías','Crea por lo menos una categoría para ordenar tu carta.',setup.hasCategory,true,'categorias')}
+        ${step(2,'🏷️','Crear productos','Registra bebidas, comidas y demás productos con sus precios.',setup.hasProduct,setup.hasCategory,'productos')}
+        ${step(3,'📦','Cargar inventario','Deja al menos un producto activo con stock mayor a cero.',setup.hasStock,setup.hasProduct,'movimientos')}
+        ${step(4,'👥','Crear empleados','Puedes crear las cuentas de tus trabajadores ahora o hacerlo después.',setup.hasEmployee,setup.hasProduct,'empleados',true)}
+        ${step(5,'💰','Abrir la primera caja','Abre una caja para comprobar que el flujo de ventas está listo.',setup.cashOpened,setup.hasStock,'caja')}
+        ${step(6,'🛒','Venta de prueba','Realiza una venta de prueba. Si no deseas generar una venta, puedes omitir este paso.',setup.saleDone || setup.saleSkipped,setup.cashOpened,'ventas')}
+      </div>
+      ${setup.cashOpened && !setup.saleDone && !setup.saleSkipped ? '<div class="setup-inline-actions"><button class="btn btn-secondary" onclick="Pages.skipSetupSale()">Omitir venta de prueba</button></div>' : ''}
+      <div class="setup-finish">
+        <div><strong>${setup.canFinish ? 'Todo listo para empezar' : 'Completa los pasos obligatorios'}</strong><p>${setup.canFinish ? 'Finaliza el tutorial para habilitar todos los apartados sin restricciones.' : 'Categoría, producto, stock, caja y venta de prueba (o su omisión) son necesarios.'}</p></div>
+        <button class="btn btn-primary" ${setup.canFinish ? '' : 'disabled'} onclick="Pages.finishSetup()">Finalizar configuración</button>
+      </div>` : `
+      <div class="setup-complete"><div class="setup-complete-icon">✅</div><div><strong>Asistente de inicio desactivado</strong><p>Todos los apartados están habilitados. Puedes volver a activar la guía cuando quieras.</p></div><button class="btn btn-secondary" onclick="Pages.restartSetup()">Mostrar tutorial</button></div>`;
+
+    return `<div class="page-header"><div><h1 class="page-title">⚙️ Configuración</h1><p class="ux-page-sub">Puesta en marcha, estado general y herramientas administrativas.</p></div></div>
+      <div class="card setup-card">
+        <div class="ux-section-head"><div><h3>🧭 Tutorial para iniciar desde cero</h3><p>Guía paso a paso para preparar el bar sin saltarse configuraciones importantes.</p></div></div>
+        ${tutorialHtml}
       </div>
       <div class="row g-3 mt-1">
-        <div class="col-12 col-lg-6"><div class="card p-3">
+        <div class="col-12 col-lg-6"><div class="card p-3 h-100">
           <h5>Proyecto X Bar</h5><p class="text-muted mb-3">Información general del sistema.</p>
           <div class="mb-2"><strong>Administrador:</strong> ${Utils.escapeHtml(u.nombre || u.nombres || 'Administrador')}</div>
           <div class="mb-2"><strong>Correo:</strong> ${Utils.escapeHtml(u.email || '')}</div>
           <div class="mb-2"><strong>Base de datos:</strong> Firebase / Firestore</div>
           <div><strong>Proyecto:</strong> ${Utils.escapeHtml(firebaseConfig.projectId || '')}</div>
         </div></div>
-        <div class="col-12 col-lg-6"><div class="card p-3">
-          <h5>⚡ Optimización aplicada</h5>
-          <div class="ux-opt-list"><span>✓ Productos en tiempo real</span><span>✓ Ventas solo del día en tiempo real</span><span>✓ Historiales bajo demanda</span><span>✓ Máximo 250 registros por consulta histórica</span><span>✓ Caché persistente en el dispositivo</span><span>✓ Cierre de caja reutiliza ventas ya cargadas</span><span>✓ Validación de caja reutilizada durante la sesión</span></div>
-          <p class="text-muted mt-3 mb-0">La configuración sensible permanece en <code>firebase-config.js</code>.</p>
+        <div class="col-12 col-lg-6"><div class="card p-3 h-100">
+          <h5>⚡ Optimización Firebase</h5>
+          <div class="ux-opt-list"><span>✓ Productos en tiempo real</span><span>✓ Ventas solo del día en tiempo real</span><span>✓ Historiales bajo demanda</span><span>✓ Consultas históricas limitadas</span><span>✓ Caché persistente en el dispositivo</span><span>✓ Cierre de caja reutiliza datos ya cargados</span></div>
+          <p class="text-muted mt-3 mb-0">La app mantiene carga diferida, límites en historiales y persistencia local para trabajar de forma eficiente.</p>
         </div></div>
+      </div>
+      <div class="card reset-card mt-3">
+        <div class="reset-card-main"><div class="reset-icon">♻️</div><div><h3>Reinicio del sistema</h3><p>Borra ventas, cajas, gastos, movimientos, productos, categorías, archivos eliminados, auditoría y perfiles de empleados. <strong>Conserva al administrador conectado</strong> para que no pierdas el acceso.</p></div></div>
+        <div class="reset-warning">⚠️ Esta acción es irreversible. Está pensada para dejar el proyecto limpio antes de entregarlo o comenzar una instalación nueva.</div>
+        <button class="btn btn-danger" onclick="Pages.openResetSystemModal()">Reiniciar y dejar sistema limpio</button>
       </div>`;
+  },
+
+  skipSetupSale() {
+    SetupGuide.skipSale();
+    Toast.show('Venta de prueba omitida. Ya puedes finalizar la configuración.');
+    Router.go('configuracion');
+  },
+
+  finishSetup() {
+    const r = SetupGuide.finish();
+    if (!r.ok) return Toast.show(r.error, 'error');
+    Toast.show('Configuración inicial finalizada. Todos los apartados están habilitados.');
+    App.buildNav();
+    Router.go('configuracion');
+  },
+
+  restartSetup() {
+    confirmAction('Se volverá a activar la guía y algunos apartados podrían aparecer bloqueados hasta completar sus requisitos. No se borrará ningún dato.', async()=>{
+      SetupGuide.restart();
+      Modal.close();
+      App.buildNav();
+      Router.go('configuracion');
+      return {ok:true};
+    }, {title:'Activar tutorial de inicio',confirmText:'Activar tutorial',danger:false,key:'restart-setup'});
+  },
+
+  openResetSystemModal() {
+    Modal.open(`
+      <div class="modal-header"><h2>♻️ Reiniciar sistema</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
+      <div class="modal-body">
+        <div class="alert alert-danger"><strong>Se eliminarán los datos operativos del sistema.</strong><br>El administrador conectado será conservado.</div>
+        <label class="form-label">Contraseña de reinicio</label>
+        <input id="reset-system-password" class="form-control" type="password" autocomplete="off" placeholder="Ingresa la contraseña" onkeydown="if(event.key==='Enter') Pages.validateResetPassword()">
+        <p class="ux-help mt-2">Esta contraseña protege el botón contra reinicios accidentales.</p>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-danger" onclick="Pages.validateResetPassword()">Continuar</button></div>
+    `, {staticBackdrop:true});
+    setTimeout(()=>document.getElementById('reset-system-password')?.focus(),50);
+  },
+
+  validateResetPassword() {
+    const pass = document.getElementById('reset-system-password')?.value || '';
+    if (pass !== 'adminadmin') return Toast.show('Contraseña de reinicio incorrecta', 'error');
+    this._resetPassword = pass;
+    confirmAction('¿Confirmas que deseas borrar todos los datos del negocio y volver al modo de configuración inicial? Esta acción NO se puede deshacer.', async()=>{
+      const res = await Store.resetSystem(this._resetPassword || '');
+      this._resetPassword = '';
+      if (!res.ok) { Toast.show(res.error, 'error'); return res; }
+      SetupGuide.reset();
+      App.buildNav();
+      Modal.close();
+      const employeeCount = Number(res.employeeProfilesDeleted || 0);
+      Modal.open(`
+        <div class="modal-header"><h2>✅ Sistema reiniciado</h2><button class="btn-icon" onclick="Modal.close();Router.go('configuracion')">✕</button></div>
+        <div class="modal-body">
+          <p>El sistema quedó limpio y el tutorial de puesta en marcha volvió a activarse.</p>
+          <div class="alert alert-warning"><strong>Importante sobre Firebase Authentication:</strong><br>Se eliminaron ${employeeCount} perfil(es) de empleado de Firestore, pero una aplicación web no puede borrar de forma segura las cuentas de otros usuarios de Firebase Authentication. Si vas a reutilizar los mismos correos, elimínalos una vez desde <strong>Firebase Console → Authentication → Users</strong>.</div>
+          <p class="text-muted">El administrador con el que realizaste el reinicio se conserva para que puedas seguir ingresando.</p>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="Modal.close();Router.go('configuracion')">Comenzar configuración</button></div>
+      `, {staticBackdrop:true});
+      return res;
+    }, {title:'Última confirmación',confirmText:'Sí, reiniciar todo',danger:true,key:'reset-system'});
   }
+
 };

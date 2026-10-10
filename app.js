@@ -1,4 +1,89 @@
 /* ===== APP ROUTER & INIT ===== */
+/* ===== ASISTENTE DE PUESTA EN MARCHA ===== */
+const SetupGuide = {
+  KEY: 'px_setup_v30',
+
+  _read() {
+    try { return JSON.parse(localStorage.getItem(this.KEY) || '{}'); }
+    catch (_) { return {}; }
+  },
+  _write(data) {
+    try { localStorage.setItem(this.KEY, JSON.stringify(data)); } catch (_) {}
+  },
+  reset() {
+    this._write({active:true,completed:false,cashOpened:false,saleDone:false,saleSkipped:false});
+  },
+  restart() {
+    this._write({active:true,completed:false,cashOpened:false,saleDone:false,saleSkipped:false});
+    try { App.buildNav(); } catch (_) {}
+  },
+  mark(flag) {
+    const d = this._read();
+    d.active = true;
+    d.completed = false;
+    d[flag] = true;
+    this._write(d);
+    try { App.buildNav(); } catch (_) {}
+  },
+  skipSale() { this.mark('saleSkipped'); },
+  snapshot() {
+    const d = this._read();
+    const hasCategory = Store.state.categories.some(c => c.estado !== 'Inactivo');
+    const hasProduct = Store.state.products.some(p => p.estado !== 'Inactivo');
+    const hasStock = Store.state.products.some(p => p.estado === 'Activo' && Number(p.stock || 0) > 0);
+    const hasEmployee = Store.state.users.some(u => u.role === 'empleado' && String(u.estado || '').toLowerCase() === 'activo');
+    const cashOpened = !!d.cashOpened || Store.state.cashSessions.some(c => c.estado === 'Abierta');
+    const saleDone = !!d.saleDone || Store.state.sales.some(v => v.estado !== 'Anulada');
+    const saleReady = saleDone || !!d.saleSkipped;
+    return {data:d,hasCategory,hasProduct,hasStock,hasEmployee,cashOpened,saleDone,saleSkipped:!!d.saleSkipped,saleReady,
+      canFinish:hasCategory && hasProduct && hasStock && cashOpened && saleReady};
+  },
+  isActive() {
+    if (!Auth.isAdmin()) return false;
+    const d = this._read();
+    if (d.completed) return false;
+    if (d.active) return true;
+    // No activar automáticamente en instalaciones antiguas que ya tienen catálogo.
+    // Sí activarlo cuando la base está realmente vacía o acaba de reiniciarse.
+    if (Store.state.categories.length === 0 && Store.state.products.length === 0) {
+      this._write({...d,active:true,completed:false});
+      return true;
+    }
+    return false;
+  },
+  finish() {
+    const s = this.snapshot();
+    if (!s.canFinish) return {ok:false,error:'Completa los pasos obligatorios antes de finalizar el tutorial'};
+    this._write({...s.data,active:false,completed:true});
+    try { App.buildNav(); } catch (_) {}
+    return {ok:true};
+  },
+  isPageEnabled(page) {
+    if (!Auth.isAdmin() || !this.isActive()) return true;
+    const s = this.snapshot();
+    if (['dashboard','configuracion','categorias'].includes(page)) return true;
+    if (page === 'productos') return s.hasCategory;
+    if (['movimientos','empleados'].includes(page)) return s.hasProduct;
+    if (page === 'caja') return s.hasStock;
+    if (page === 'ventas') return s.hasStock && s.cashOpened;
+    if (['historial','gastos','reportes'].includes(page)) return s.saleReady;
+    return true;
+  },
+  reason(page) {
+    const s = this.snapshot();
+    if (page === 'productos' && !s.hasCategory) return 'Primero crea al menos una categoría.';
+    if (['movimientos','empleados'].includes(page) && !s.hasProduct) return 'Primero crea al menos un producto.';
+    if (page === 'caja' && !s.hasStock) return 'Primero agrega stock a por lo menos un producto.';
+    if (page === 'ventas' && !s.cashOpened) return 'Primero abre una caja desde el paso de Caja.';
+    if (['historial','gastos','reportes'].includes(page) && !s.saleReady) return 'Completa u omite la venta de prueba para habilitar este apartado.';
+    return 'Este apartado todavía está bloqueado por el tutorial de inicio.';
+  },
+  explain(page) {
+    Toast.show(this.reason(page), 'error');
+    Router.go('configuracion');
+  }
+};
+
 const Router = {
   current: null,
 
@@ -29,6 +114,10 @@ const Router = {
       Toast.show('Acceso denegado', 'error');
       page = 'dashboard';
     }
+    if (Auth.isAdmin() && !SetupGuide.isPageEnabled(page)) {
+      Toast.show(SetupGuide.reason(page), 'error');
+      page = 'configuracion';
+    }
     this.current = page;
     if (typeof App !== 'undefined') App.refreshPending = false;
     const previousScrollY = window.scrollY || 0;
@@ -42,6 +131,7 @@ const Router = {
     main.innerHTML = renderer();
     this.makeTablesMobileFriendly(main);
     if (typeof Pages !== 'undefined' && Pages.initPagination) Pages.initPagination(page);
+    App.buildNav();
     this.updateNav();
     // Close mobile sidebar
     document.getElementById('sidebar')?.classList.remove('open');
@@ -233,12 +323,14 @@ const App = {
       { page: 'caja', icon: '💰', label: 'Mi caja' }
     ];
 
-    const navHtml = menu.map(m => `
-      <button class="nav-item" data-page="${m.page}" onclick="Router.go('${m.page}')">
+    const navHtml = menu.map(m => {
+      const enabled = !isAdmin || SetupGuide.isPageEnabled(m.page);
+      return `
+      <button class="nav-item ${enabled ? '' : 'nav-locked'}" data-page="${m.page}" onclick="${enabled ? `Router.go('${m.page}')` : `SetupGuide.explain('${m.page}')`}">
         <span class="nav-icon">${m.icon}</span>
-        <span>${m.label}</span>
-      </button>
-    `).join('');
+        <span>${m.label}</span>${enabled ? '' : '<span class="nav-lock" aria-label="Bloqueado">🔒</span>'}
+      </button>`;
+    }).join('');
 
     document.getElementById('nav-menu').innerHTML = navHtml;
 
@@ -261,12 +353,14 @@ const App = {
       <button class="nav-item mobile-more" type="button" onclick="App.openMobileMenu()">
         <span class="nav-icon">☰</span><span>Más</span>
       </button>`;
-    document.getElementById('bottom-nav').innerHTML = bottomItems.map(m => `
-      <button class="nav-item" data-page="${m.page}" onclick="Router.go('${m.page}')">
+    document.getElementById('bottom-nav').innerHTML = bottomItems.map(m => {
+      const enabled = !isAdmin || SetupGuide.isPageEnabled(m.page);
+      return `
+      <button class="nav-item ${enabled ? '' : 'nav-locked'}" data-page="${m.page}" onclick="${enabled ? `Router.go('${m.page}')` : `SetupGuide.explain('${m.page}')`}">
         <span class="nav-icon">${m.icon}</span>
-        <span>${m.label}</span>
-      </button>
-    `).join('') + openMobileMenu;
+        <span>${m.label}</span>${enabled ? '' : '<span class="nav-lock" aria-label="Bloqueado">🔒</span>'}
+      </button>`;
+    }).join('') + openMobileMenu;
   },
 
   updateUserInfo() {

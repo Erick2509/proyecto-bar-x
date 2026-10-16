@@ -1,4 +1,19 @@
+# ProyectoBarX v34
+
+Versión corregida de filtros, totales dinámicos y continuidad de caja durante la madrugada.
+
 # PROYECTO X — Firebase + HTML/CSS/JS + Bootstrap
+
+## v34 - Filtros rápidos y totales corregidos
+
+- Corregido el error de consola de tablas responsivas.
+- Gastos e Historial recalculan primero el monto y después redibujan la tabla.
+- Búsquedas con debounce corto para evitar trabajo innecesario por cada tecla.
+- Cambio de rango muestra datos disponibles inmediatamente y sincroniza Firestore en segundo plano.
+- El total no se queda en “Actualizando…” aunque falle una mejora visual secundaria.
+- Caja continua de v33 se mantiene: no se cierra automáticamente a medianoche.
+
+Consulta `CAMBIOS_V34.md` y `PRUEBAS_V34.md`.
 
 
 ## v33 - Totales dinámicos + caja continua durante la madrugada
@@ -12,7 +27,7 @@
 - Dashboard por medios de pago.
 - Precio de compra maestro preservado en nuevas entradas de stock.
 - Selector ampliado con más de 300 emojis y entrada libre.
-- Caché PWA `proyecto-x-v33`.
+- Caché PWA `proyecto-x-v34`.
 
 Consulta `CAMBIOS_V33.md`, `PRUEBAS_V33.md` y `GUIA_INICIO_V32.md`.
 

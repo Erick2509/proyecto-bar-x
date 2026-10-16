@@ -177,6 +177,14 @@ const App = {
   refreshPending: false,
   dayWatchTimer: null,
 
+  // Utilidad pública usada por las vistas cuando una tabla se vuelve a renderizar.
+  // En v33 quedó definida solo en Router; eso provocaba el error
+  // `App.makeTablesMobileFriendly is not a function` y detenía los filtros antes
+  // de actualizar sus totales. Mantenerla aquí evita ese fallo en todas las páginas.
+  makeTablesMobileFriendly(root = document) {
+    return Router.makeTablesMobileFriendly(root);
+  },
+
   isInteracting() {
     const overlay = document.getElementById('modal-overlay');
     if (overlay && !overlay.classList.contains('hidden')) return true;

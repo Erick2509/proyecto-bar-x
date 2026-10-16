@@ -2,6 +2,18 @@
 const Pages = {
   _pageSize: 10,
   _pages: {},
+  _filterTimers: {},
+
+  // Los filtros de texto esperan unas milésimas antes de redibujar. Así evitamos
+  // rehacer toda la tabla por cada tecla y la búsqueda se siente inmediata.
+  _queueFilter(key, fn, delay = 90) {
+    clearTimeout(this._filterTimers[key]);
+    this._filterTimers[key] = setTimeout(() => {
+      try { fn(); } catch (e) { console.error(e); Toast.show('No se pudo aplicar el filtro', 'error'); }
+    }, delay);
+  },
+  queueGastoFilter() { this._queueFilter('gastos', () => this.filterGastos(false)); },
+  queueHistorialFilter() { this._queueFilter('historial', () => this.filterHistorial(false)); },
   _paginateRows(key, tbodyId, page = 1) {
     const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
@@ -926,7 +938,7 @@ const Pages = {
         <div class="stat-card"><div class="stat-label">📅 Gastos de hoy</div><div class="stat-value">${Utils.formatMoney(todayTotal)}</div><div class="stat-sub">Referencia del día actual</div></div>
       </div>
       <div class="toolbar ux-filter-grid">
-        <input type="search" class="search-input" id="gasto-search" placeholder="🔎 Buscar concepto..." oninput="Pages.filterGastos()" />
+        <input type="search" class="search-input" id="gasto-search" placeholder="🔎 Buscar concepto..." oninput="Pages.queueGastoFilter()" />
         <select class="filter-select" id="gasto-cat-filter" onchange="Pages.filterGastos()">
           <option value="">Todas las categorías</option><option value="Stock">Compra de stock</option><option value="Alquiler">Alquiler</option><option value="Servicios">Servicios</option><option value="Personal">Personal</option><option value="Mantenimiento">Mantenimiento</option><option value="Otros">Otros</option>
         </select>
@@ -959,18 +971,10 @@ const Pages = {
       </tr>`;
     }).join('');
   },
-  async filterGastos(loadRange=false) {
-    const seq=loadRange?((this._gastoFilterSeq||0)+1):(this._gastoFilterSeq||0);if(loadRange)this._gastoFilterSeq=seq;
+  _applyGastoFilters({syncing=false}={}) {
     const desde=document.getElementById('gasto-from')?.value||Store.daysAgo(30);
     const hasta=document.getElementById('gasto-to')?.value||Store.today();
-    if(desde>hasta)return Toast.show('La fecha Desde no puede ser posterior a Hasta','error');
-    const totalEl=document.getElementById('gasto-total'),rangeEl=document.getElementById('gasto-range-label');
-    if(loadRange&&totalEl){totalEl.classList.add('ux-value-loading');totalEl.textContent='Actualizando…';}
-    if(loadRange && Store.loadExpensesForRange){
-      const loaded=await Store.loadExpensesForRange(desde,hasta);
-      if(seq!==this._gastoFilterSeq)return;
-      if(!loaded?.ok){if(totalEl)totalEl.classList.remove('ux-value-loading');return Toast.show(loaded?.error||'No se pudieron cargar los gastos del rango','error');}
-    }
+    if(desde>hasta){Toast.show('La fecha Desde no puede ser posterior a Hasta','error');return null;}
     const q=(document.getElementById('gasto-search')?.value||'').trim().toLowerCase();
     const cat=document.getElementById('gasto-cat-filter')?.value||'';
     const origin=document.getElementById('gasto-origin-filter')?.value||'';
@@ -978,13 +982,33 @@ const Pages = {
       const auto=String(e.origen||'Manual')!=='Manual';
       return String(e.fecha||'')>=desde&&String(e.fecha||'')<=hasta&&(!q||String(e.concepto||'').toLowerCase().includes(q))&&(!cat||e.categoria===cat)&&(!origin||(origin==='Manual'?!auto:auto));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
-    const tbody=document.getElementById('gasto-tbody');
-    if(tbody){tbody.innerHTML=this._gastoRows(list);App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);this._paginateRows('gastos','gasto-tbody',1);}
-    const total=list.reduce((s,e)=>s+Number(e.monto||0),0);
+
+    // Actualizar primero las cifras. Aunque falle un detalle visual de la tabla,
+    // el cliente siempre ve el total correcto del filtro seleccionado.
+    const total=list.reduce((sum,e)=>sum+Number(e.monto||0),0);
+    const totalEl=document.getElementById('gasto-total');
+    const rangeEl=document.getElementById('gasto-range-label');
     const countEl=document.getElementById('gasto-count');
-    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);}
-    if(rangeEl)rangeEl.textContent=desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`;
+    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);totalEl.title=syncing?'Sincronizando con Firebase…':'';}
+    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${syncing?' · sincronizando…':''}`;
     if(countEl)countEl.textContent=String(list.length);
+
+    const tbody=document.getElementById('gasto-tbody');
+    if(tbody){
+      tbody.innerHTML=this._gastoRows(list);
+      try{App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);}catch(e){console.warn('Tabla móvil gastos:',e);}
+      try{this._paginateRows('gastos','gasto-tbody',1);}catch(e){console.warn('Paginación gastos:',e);}
+    }
+    return {desde,hasta,list,total};
+  },
+  async filterGastos(loadRange=false) {
+    const current=this._applyGastoFilters({syncing:!!loadRange});
+    if(!current||!loadRange||!Store.loadExpensesForRange)return;
+    const seq=(this._gastoFilterSeq||0)+1;this._gastoFilterSeq=seq;
+    const loaded=await Store.loadExpensesForRange(current.desde,current.hasta);
+    if(seq!==this._gastoFilterSeq)return;
+    if(!loaded?.ok){Toast.show(loaded?.error||'No se pudieron cargar los gastos del rango','error');return this._applyGastoFilters();}
+    this._applyGastoFilters();
   },
   resetGastoFilters() {
     const q=document.getElementById('gasto-search'),cat=document.getElementById('gasto-cat-filter'),origin=document.getElementById('gasto-origin-filter'),from=document.getElementById('gasto-from'),to=document.getElementById('gasto-to');
@@ -1231,7 +1255,7 @@ const Pages = {
         <div class="stat-card"><div class="stat-label">🧾 Resultados</div><div class="stat-value" id="hist-count">${valid.length}</div><div class="stat-sub"><span id="hist-valid-label">${valid.length} completada(s)</span> · <span id="hist-annulled-label">${annulled.length} anulada(s)</span></div></div>
       </div>
       <div class="toolbar ux-filter-grid">
-        <input type="search" class="search-input" id="hist-search" placeholder="🔎 Buscar..." oninput="Pages.filterHistorial()" />
+        <input type="search" class="search-input" id="hist-search" placeholder="🔎 Buscar..." oninput="Pages.queueHistorialFilter()" />
         <select class="filter-select" id="hist-method" onchange="Pages.filterHistorial()"><option value="">Todos los métodos</option><option value="Efectivo">Efectivo</option><option value="Yape">Yape</option><option value="Plin">Plin</option><option value="Tarjeta">Tarjeta</option></select>
         <label class="ux-date-filter">Desde<input type="date" id="hist-from" class="filter-select" value="${desde}" onchange="Pages.filterHistorial(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="hist-to" class="filter-select" value="${hasta}" onchange="Pages.filterHistorial(true)" /></label>
@@ -1248,40 +1272,61 @@ const Pages = {
       return `<tr><td data-label="Fecha">${Utils.formatDate(s.fecha)}</td><td data-label="Hora">${Utils.formatTime(s.hora)}</td><td data-label="Empleado">${Utils.escapeHtml(emp?`${emp.nombres} ${emp.apellidos}`:(s.empleadoNombre||'—'))}</td><td data-label="Productos" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td><td data-label="Total" style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td><td data-label="Método">${Utils.escapeHtml(Store.salePaymentLabel(s))}</td><td data-label="Estado">${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td><td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">👁️ Ver</button> ${Auth.isAdmin()&&s.estado!=='Anulada'?`<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>`:''}</td></tr>`;
     }).join('');
   },
-  async filterHistorial(loadRange=false) {
-    const seq=loadRange?((this._histFilterSeq||0)+1):(this._histFilterSeq||0);if(loadRange)this._histFilterSeq=seq;
-    const desde=document.getElementById('hist-from')?.value||Store.daysAgo(30),hasta=document.getElementById('hist-to')?.value||Store.today();
-    if(desde>hasta)return Toast.show('La fecha Desde no puede ser posterior a Hasta','error');
-    const totalEl=document.getElementById('hist-total'),rangeEl=document.getElementById('hist-range-label');
-    if(loadRange&&totalEl){totalEl.classList.add('ux-value-loading');totalEl.textContent='Actualizando…';}
-    if(loadRange&&Store.loadSalesForRange){
-      const loaded=await Store.loadSalesForRange(desde,hasta);
-      if(seq!==this._histFilterSeq)return;
-      if(!loaded?.ok){if(totalEl)totalEl.classList.remove('ux-value-loading');return Toast.show(loaded?.error||'No se pudieron cargar las ventas del rango','error');}
-    }
+  _applyHistorialFilters({syncing=false}={}) {
+    const desde=document.getElementById('hist-from')?.value||Store.daysAgo(30);
+    const hasta=document.getElementById('hist-to')?.value||Store.today();
+    if(desde>hasta){Toast.show('La fecha Desde no puede ser posterior a Hasta','error');return null;}
     const method=(document.getElementById('hist-method')?.value||'').trim();
-    const q=(document.getElementById('hist-search')?.value||'').trim().toLowerCase(),user=Auth.currentUser();
-    let sales=[...Store.state.sales];if(Auth.isEmployee())sales=sales.filter(s=>s.empleadoId===user.id);
+    const q=(document.getElementById('hist-search')?.value||'').trim().toLowerCase();
+    const user=Auth.currentUser();
+    let sales=[...Store.state.sales];
+    if(Auth.isEmployee())sales=sales.filter(s=>s.empleadoId===user.id);
     sales=sales.filter(s=>{
-      const emp=Store.getUser(s.empleadoId),products=(Array.isArray(s.items)?s.items:[]).map(i=>Store.getProduct(i.productoId)?.nombre||i?.nombre||'').join(' ');
+      const emp=Store.getUser(s.empleadoId);
+      const products=(Array.isArray(s.items)?s.items:[]).map(i=>Store.getProduct(i.productoId)?.nombre||i?.nombre||'').join(' ');
       const haystack=`${s.numero||s.id||''} ${emp?.nombres||s.empleadoNombre||''} ${emp?.apellidos||''} ${products} ${Store.salePaymentLabel(s)}`.toLowerCase();
       const methods=Store.getSalePayments(s).map(p=>p.metodo);
       return String(s.fecha||'')>=desde&&String(s.fecha||'')<=hasta&&(!method||methods.includes(method))&&(!q||haystack.includes(q));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
-    const tbody=document.getElementById('hist-tbody');if(tbody){tbody.innerHTML=this._histRows(sales);App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);this._paginateRows('historial','hist-tbody',1);}
-    const valid=sales.filter(s=>s.estado!=='Anulada'),annulled=sales.filter(s=>s.estado==='Anulada');
+
+    const valid=sales.filter(s=>s.estado!=='Anulada');
+    const annulled=sales.filter(s=>s.estado==='Anulada');
     const total=valid.reduce((sum,s)=>{
       if(!method)return sum+Number(s.total||0);
-      const methodAmount=Store.getSalePayments(s).filter(p=>p.metodo===method).reduce((a,p)=>a+Number(p.monto||0),0);
-      return sum+methodAmount;
+      return sum+Store.getSalePayments(s).filter(p=>p.metodo===method).reduce((a,p)=>a+Number(p.monto||0),0);
     },0);
-    const countEl=document.getElementById('hist-count'),validEl=document.getElementById('hist-valid-label'),annulledEl=document.getElementById('hist-annulled-label'),labelEl=document.getElementById('hist-total-label');
-    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);}
+
+    // Las métricas se pintan ANTES que la tabla para que nunca queden en
+    // "Actualizando…" por un error visual secundario.
+    const totalEl=document.getElementById('hist-total');
+    const rangeEl=document.getElementById('hist-range-label');
+    const countEl=document.getElementById('hist-count');
+    const validEl=document.getElementById('hist-valid-label');
+    const annulledEl=document.getElementById('hist-annulled-label');
+    const labelEl=document.getElementById('hist-total-label');
+    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);totalEl.title=syncing?'Sincronizando con Firebase…':'';}
     if(labelEl)labelEl.textContent=method?`💰 Total cobrado en ${method}`:'💰 Total vendido en este filtro';
-    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${method?' · En pagos separados se suma solo esa forma de pago':''}`;
-    if(countEl)countEl.textContent=String(valid.length);
+    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${method?' · en pagos separados se suma solo ese método':''}${syncing?' · sincronizando…':''}`;
+    if(countEl)countEl.textContent=String(sales.length);
     if(validEl)validEl.textContent=`${valid.length} completada(s)`;
     if(annulledEl)annulledEl.textContent=`${annulled.length} anulada(s)`;
+
+    const tbody=document.getElementById('hist-tbody');
+    if(tbody){
+      tbody.innerHTML=this._histRows(sales);
+      try{App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);}catch(e){console.warn('Tabla móvil historial:',e);}
+      try{this._paginateRows('historial','hist-tbody',1);}catch(e){console.warn('Paginación historial:',e);}
+    }
+    return {desde,hasta,method,sales,total};
+  },
+  async filterHistorial(loadRange=false) {
+    const current=this._applyHistorialFilters({syncing:!!loadRange});
+    if(!current||!loadRange||!Store.loadSalesForRange)return;
+    const seq=(this._histFilterSeq||0)+1;this._histFilterSeq=seq;
+    const loaded=await Store.loadSalesForRange(current.desde,current.hasta);
+    if(seq!==this._histFilterSeq)return;
+    if(!loaded?.ok){Toast.show(loaded?.error||'No se pudieron cargar las ventas del rango','error');return this._applyHistorialFilters();}
+    this._applyHistorialFilters();
   },
   resetHistFilters() {
     const q=document.getElementById('hist-search'),method=document.getElementById('hist-method'),from=document.getElementById('hist-from'),to=document.getElementById('hist-to');

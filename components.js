@@ -18,7 +18,7 @@ const Components = {
     const cat = Store.getCategory(p.categoriaId);
     return `
       <tr>
-        <td data-label="Imagen"><span class="product-img-placeholder">${p.imagen || '📦'}</span></td>
+        <td data-label="Imagen"><span class="product-img-placeholder">${Utils.escapeHtml(p.imagen || '📦')}</span></td>
         <td data-label="Producto"><strong>${Utils.escapeHtml(p.nombre)}</strong></td>
         <td data-label="Categoría">${Utils.escapeHtml(cat?.nombre || '—')}</td>
         <td data-label="Precio" style="color:var(--amber)">${Utils.formatMoney(p.precioVenta)}</td>
@@ -35,7 +35,7 @@ const Components = {
     return `
       <div class="card" style="margin-bottom:0.75rem">
         <div style="display:flex;gap:0.75rem;align-items:flex-start">
-          <span style="font-size:1.8rem">${p.imagen || '📦'}</span>
+          <span style="font-size:1.8rem">${Utils.escapeHtml(p.imagen || '📦')}</span>
           <div style="flex:1;min-width:0">
             <strong>${Utils.escapeHtml(p.nombre)}</strong>
             <div style="font-size:0.8rem;color:var(--text-muted)">${Utils.escapeHtml(cat?.nombre || '')}</div>

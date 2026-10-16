@@ -116,7 +116,24 @@ Esta versión reduce las lecturas cargando en tiempo real solo los datos operati
 
 ## v30 - Reinicio y puesta en marcha
 - Configuración simplificada para entrega y puesta en marcha.
-- Reinicio total protegido por contraseña.
 - Tutorial inicial con apartados bloqueados/desbloqueados por requisitos.
 - El administrador conectado se conserva durante el reinicio.
-- Ver `GUIA_INICIO_V30.md`.
+- El mecanismo de reinicio fue reemplazado y reforzado en v31; usar `GUIA_INICIO_V31.md`.
+
+## v31 - Corrección de seguridad e integridad
+- El reinicio total ya no usa una contraseña fija visible en el código. Ahora exige reautenticación con la contraseña real del administrador en Firebase Authentication.
+- `data.js` fue retirado físicamente del proyecto para que no se publiquen credenciales antiguas de demostración.
+- Creación, edición, desactivación y restablecimiento de empleados cuentan con validación de rol también en la capa Store.
+- Si Firebase Authentication crea un empleado pero falla la creación de su perfil Firestore, se intenta eliminar inmediatamente la cuenta recién creada para evitar usuarios huérfanos.
+- Productos, categorías, movimientos manuales y cantidades del carrito tienen validaciones adicionales de tipo, rango e integridad.
+- Se bloquean cantidades negativas, fraccionarias o inválidas en el carrito y movimientos de stock.
+- Las ventas vuelven a validar producto activo, stock, cantidades y precios dentro de la transacción antes de descontar inventario.
+- Se reforzó el escape HTML de nombres, iconos, historial y atributos dinámicos para reducir riesgo de XSS almacenado.
+- Fechas y horas renderizadas se validan antes de mostrarse.
+- Reglas Firestore reforzadas con validación de formato, tipos, tamaños, estados, número de venta y tamaño máximo del carrito.
+- Caché PWA actualizado a `proyecto-x-v31`.
+- Se habilitó el zoom del navegador en móvil para mejorar accesibilidad.
+- Ver `GUIA_INICIO_V31.md` y `PRUEBAS_V31.md`.
+
+### Nota de arquitectura
+La aplicación sigue siendo una PWA cliente conectada directamente a Firestore. Las reglas reducen el riesgo, pero una validación contable completamente resistente a un cliente autenticado manipulado requiere mover el registro de ventas/inventario a un backend confiable (por ejemplo, una API propia o una función de servidor). Para un entorno interno con empleados identificados, la v31 mantiene la arquitectura actual sin introducir esa complejidad adicional.

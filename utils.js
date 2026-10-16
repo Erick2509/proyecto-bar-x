@@ -4,15 +4,26 @@ const Utils = {
     return 'S/ ' + Number(n).toFixed(2);
   },
   formatDate(iso) {
-    if (!iso) return '—';
-    const [y, m, d] = iso.split('-');
+    const value = String(iso || '').trim();
+    if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return '—';
+    const [y, m, d] = value.split('-');
     return `${d}/${m}/${y}`;
   },
+  formatTime(hora) {
+    const value = String(hora || '').trim();
+    const match = value.match(/^([0-9]{2}):([0-9]{2})(?::[0-9]{2})?$/);
+    return match ? `${match[1]}:${match[2]}` : '—';
+  },
   formatDateTime(fecha, hora) {
-    return `${this.formatDate(fecha)} ${hora || ''}`.trim();
+    return `${this.formatDate(fecha)} ${this.formatTime(hora)}`.trim();
   },
   todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Lima',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
   },
   stockBadge(status) {
     if (status === 'agotado') return '<span class="badge badge-danger">🔴 Agotado</span>';
@@ -20,12 +31,13 @@ const Utils = {
     return '<span class="badge badge-success">🟢 Normal</span>';
   },
   escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     return String(str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   },
   debounce(fn, ms = 250) {
     let t;

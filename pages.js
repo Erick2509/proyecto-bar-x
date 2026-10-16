@@ -39,7 +39,7 @@ const Pages = {
       <div class="page-header ux-page-head">
         <div><h1 class="page-title">Inicio</h1><p class="ux-page-sub">Resumen de hoy y accesos rápidos</p></div>
       </div>
-      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===Store.today()); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Abierta ${String(c.hora||'').slice(0,5)} · Inicial ${Utils.formatMoney(c.montoInicial||0)}`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===Store.today()); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Abierta ${Utils.formatTime(c.hora)} · Inicial ${Utils.formatMoney(c.montoInicial||0)}`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
       <div class="ux-quick-actions">
         <button class="ux-action primary" onclick="Router.go('ventas')"><span>🛒</span><b>Nueva venta</b><small>Cobrar productos</small></button>
         <button class="ux-action" onclick="Router.go('productos')"><span>📦</span><b>Agregar stock</b><small>Productos existentes</small></button>
@@ -79,10 +79,10 @@ const Pages = {
                   ${recent.map(s => {
                     const emp = Store.getUser(s.empleadoId);
                     return `<tr>
-                      <td>${Utils.formatDate(s.fecha)} ${String(s.hora||'—').slice(0,5)}</td>
+                      <td>${Utils.formatDate(s.fecha)} ${Utils.formatTime(s.hora)}</td>
                       <td>${Utils.escapeHtml(emp ? emp.nombres : (s.empleadoNombre || '—'))}</td>
                       <td style="color:var(--amber)">${Utils.formatMoney(s.total)}</td>
-                      <td>${s.metodoPago}</td>
+                      <td>${Utils.escapeHtml(s.metodoPago || '—')}</td>
                     </tr>`;
                   }).join('')}
                 </tbody>
@@ -100,7 +100,7 @@ const Pages = {
               ${low.map(p => {
                 const st = Store.stockStatus(p);
                 return `<div class="alert-item ${st === 'agotado' ? 'danger' : ''}">
-                  <span style="font-size:1.3rem">${p.imagen || '📦'}</span>
+                  <span style="font-size:1.3rem">${Utils.escapeHtml(p.imagen || '📦')}</span>
                   <div class="ai-name">${Utils.escapeHtml(p.nombre)}</div>
                   <div class="ai-stock">Stock: <strong>${p.stock}</strong> / mín. ${p.stockMinimo}</div>
                   ${Utils.stockBadge(st)}
@@ -158,7 +158,7 @@ const Pages = {
             ${low.map(p => {
               const st = Store.stockStatus(p);
               return `<div class="alert-item ${st === 'agotado' ? 'danger' : ''}">
-                <span style="font-size:1.3rem">${p.imagen || '📦'}</span>
+                <span style="font-size:1.3rem">${Utils.escapeHtml(p.imagen || '📦')}</span>
                 <div class="ai-name">${Utils.escapeHtml(p.nombre)}</div>
                 <div class="ai-stock">Stock: <strong>${p.stock}</strong></div>
                 ${Utils.stockBadge(st)}
@@ -423,14 +423,14 @@ const Pages = {
   async saveCategoria(id) {
     const nombre = document.getElementById('cat-nombre').value.trim();
     if (!nombre) { Toast.show('Nombre obligatorio', 'error'); return; }
-    if (id) {
-      const estado = document.getElementById('cat-estado')?.value;
-      await Store.updateCategory(id, { nombre, estado });
-      Toast.show('Categoría actualizada');
-    } else {
-      await Store.addCategory(nombre);
-      Toast.show('Categoría creada');
+    const res = id
+      ? await Store.updateCategory(id, { nombre, estado: document.getElementById('cat-estado')?.value })
+      : await Store.addCategory(nombre);
+    if (!res?.ok) {
+      Toast.show(res?.error || 'No se pudo guardar la categoría', 'error');
+      return;
     }
+    Toast.show(id ? 'Categoría actualizada' : 'Categoría creada');
     Modal.close();
     Router.go('categorias');
   },
@@ -873,9 +873,9 @@ const Pages = {
                 const tipoBadge = m.tipo === 'Venta' ? 'badge-accent' : m.tipo === 'Entrada' ? 'badge-success' : 'badge-warning';
                 return `<tr>
                   <td data-label="Fecha">${Utils.formatDate(m.fecha)}</td>
-                  <td data-label="Hora">${m.hora.slice(0,5)}</td>
+                  <td data-label="Hora">${Utils.formatTime(m.hora)}</td>
                   <td data-label="Producto">${Utils.escapeHtml(p?.nombre || '—')}</td>
-                  <td data-label="Tipo"><span class="badge ${tipoBadge}">${m.tipo}</span></td>
+                  <td data-label="Tipo"><span class="badge ${tipoBadge}">${Utils.escapeHtml(m.tipo || '—')}</span></td>
                   <td data-label="Cantidad">${m.cantidad}</td>
                   <td data-label="Stock ant.">${m.stockAnterior}</td>
                   <td data-label="Stock nuevo"><strong>${m.stockNuevo}</strong></td>
@@ -937,9 +937,9 @@ const Pages = {
     if (!list.length) return `<tr><td colspan="7">${Components.empty('💸', 'No hay gastos registrados')}</td></tr>`;
     return list.map(e => {
       const u = Store.getUser(e.usuarioId);
-      return `<tr data-concept="${e.concepto.toLowerCase()}" data-cat="${e.categoria}">
+      return `<tr data-concept="${Utils.escapeHtml(String(e.concepto||'').toLowerCase())}" data-cat="${Utils.escapeHtml(String(e.categoria||''))}">
         <td data-label="Fecha">${Utils.formatDate(e.fecha)}</td>
-        <td data-label="Hora">${e.hora.slice(0,5)}</td>
+        <td data-label="Hora">${Utils.formatTime(e.hora)}</td>
         <td data-label="Concepto">${Utils.escapeHtml(e.concepto)}</td>
         <td data-label="Categoría"><span class="badge badge-neutral">${Utils.escapeHtml(e.categoria)}</span></td>
         <td data-label="Monto" style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
@@ -1062,7 +1062,7 @@ const Pages = {
     const disabled = p.stock <= 0;
     return `
       <div class="product-card ${disabled ? 'disabled' : ''}" ${disabled ? '' : `onclick="Pages.addProductToCart('${p.id}')"`}>
-        <div class="pc-img">${p.imagen || '📦'}</div>
+        <div class="pc-img">${Utils.escapeHtml(p.imagen || '📦')}</div>
         <div class="pc-name">${Utils.escapeHtml(p.nombre)}</div>
         <div class="pc-cat">${Utils.escapeHtml(Store.getCategory(p.categoriaId)?.nombre || '')}</div>
         <div class="pc-price">${Utils.formatMoney(p.precioVenta)}</div>
@@ -1181,9 +1181,9 @@ const Pages = {
         <div class="sale-success">
           <div class="ss-icon">✅</div>
           <h2>¡Venta registrada!</h2>
-          <p class="ss-meta">N° ${s.numero || s.id}</p>
+          <p class="ss-meta">N° ${Utils.escapeHtml(s.numero || s.id)}</p>
           <div class="ss-total">Venta guardada correctamente</div>
-          <p class="ss-meta">Método: ${s.metodoPago}</p>
+          <p class="ss-meta">Método: ${Utils.escapeHtml(s.metodoPago || '—')}</p>
           <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-top:1.5rem">
             <button class="btn btn-primary" onclick="Modal.close();Router.go('ventas')">Nueva venta</button>
             <button class="btn btn-secondary" onclick="Modal.close();Router.go('historial')">Ver historial</button>
@@ -1242,13 +1242,15 @@ const Pages = {
     if (!sales.length) return `<tr><td colspan="8">${Components.empty('🧾', 'Todavía no hay ventas registradas')}</td></tr>`;
     return sales.map(s => {
       const emp = Store.getUser(s.empleadoId);
-      const prodSummary = s.items.map(i => {
+      const items = Array.isArray(s.items) ? s.items : [];
+      const prodSummary = items.map(i => {
         const p = Store.getProduct(i.productoId);
-        return `${p?.nombre || '?'} ×${i.cantidad}`;
+        return `${p?.nombre || i?.nombre || '?'} ×${Number(i?.cantidad || 0)}`;
       }).join(', ');
-      return `<tr data-method="${Utils.escapeHtml(String(s.metodoPago || ''))}" data-date="${s.fecha}" data-total="${Number(s.total || 0)}" data-search="${((emp?.nombres || '') + ' ' + prodSummary).toLowerCase()}">
+      const searchText=((emp?.nombres || s.empleadoNombre || '') + ' ' + prodSummary).toLowerCase();
+      return `<tr data-method="${Utils.escapeHtml(String(s.metodoPago || ''))}" data-date="${Utils.escapeHtml(String(s.fecha || ''))}" data-total="${Number(s.total || 0)}" data-search="${Utils.escapeHtml(searchText)}">
         <td data-label="Fecha">${Utils.formatDate(s.fecha)}</td>
-        <td data-label="Hora">${String(s.hora||'—').slice(0,5)}</td>
+        <td data-label="Hora">${Utils.formatTime(s.hora)}</td>
         <td data-label="Empleado">${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</td>
         <td data-label="Productos" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td>
         <td data-label="Total" style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td>
@@ -1273,7 +1275,7 @@ const Pages = {
       const saleMethod = String(s.metodoPago || '').trim().toLowerCase();
       const saleDate = String(s.fecha || '').trim();
       const emp = Store.getUser(s.empleadoId);
-      const products = (s.items || []).map(i => Store.getProduct(i.productoId)?.nombre || '').join(' ');
+      const products = (Array.isArray(s.items) ? s.items : []).map(i => Store.getProduct(i.productoId)?.nombre || i?.nombre || '').join(' ');
       const haystack = `${s.numero || s.id || ''} ${emp?.nombres || s.empleadoNombre || ''} ${emp?.apellidos || ''} ${products} ${s.metodoPago || ''}`.toLowerCase();
       return (!method || saleMethod === method) && (!date || saleDate === date) && (!q || haystack.includes(q));
     });
@@ -1296,25 +1298,25 @@ const Pages = {
     const emp = Store.getUser(s.empleadoId);
     Modal.open(`
       <div class="modal-header">
-        <h2>Detalle de venta ${s.id}</h2>
+        <h2>Detalle de venta ${Utils.escapeHtml(s.id)}</h2>
         <button class="btn-icon" onclick="Modal.close()">✕</button>
       </div>
       <div class="modal-body">
-        <div class="detail-row"><span class="dr-label">Fecha</span><span class="dr-value">${Utils.formatDate(s.fecha)} ${s.hora}</span></div>
+        <div class="detail-row"><span class="dr-label">Fecha</span><span class="dr-value">${Utils.formatDate(s.fecha)} ${Utils.formatTime(s.hora)}</span></div>
         <div class="detail-row"><span class="dr-label">Empleado</span><span class="dr-value">${Utils.escapeHtml(emp ? emp.nombres + ' ' + emp.apellidos : (s.empleadoNombre || '—'))}</span></div>
-        <div class="detail-row"><span class="dr-label">Método de pago</span><span class="dr-value">${s.metodoPago}</span></div>
+        <div class="detail-row"><span class="dr-label">Método de pago</span><span class="dr-value">${Utils.escapeHtml(s.metodoPago || '—')}</span></div>
         <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem">Productos</h4>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Producto</th><th>Cant.</th><th>P. unit.</th><th>Subtotal</th></tr></thead>
             <tbody>
-              ${s.items.map(i => {
+              ${(Array.isArray(s.items) ? s.items : []).map(i => {
                 const p = Store.getProduct(i.productoId);
                 return `<tr>
-                  <td data-label="Producto">${Utils.escapeHtml(p?.nombre || '—')}</td>
-                  <td>${i.cantidad}</td>
-                  <td>${Utils.formatMoney(i.precioUnitario)}</td>
-                  <td style="color:var(--amber)">${Utils.formatMoney(i.subtotal)}</td>
+                  <td data-label="Producto">${Utils.escapeHtml(p?.nombre || i?.nombre || '—')}</td>
+                  <td>${Number(i?.cantidad || 0)}</td>
+                  <td>${Utils.formatMoney(i?.precioUnitario)}</td>
+                  <td style="color:var(--amber)">${Utils.formatMoney(i?.subtotal)}</td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -1343,7 +1345,7 @@ const Pages = {
       <div class="product-grid" id="pd-grid">
         ${products.map(p => `
           <div class="product-card" style="cursor:default">
-            <div class="pc-img">${p.imagen || '📦'}</div>
+            <div class="pc-img">${Utils.escapeHtml(p.imagen || '📦')}</div>
             <div class="pc-name">${Utils.escapeHtml(p.nombre)}</div>
             <div class="pc-cat">${Utils.escapeHtml(Store.getCategory(p.categoriaId)?.nombre || '')}</div>
             <div class="pc-price">${Utils.formatMoney(p.precioVenta)}</div>
@@ -1360,7 +1362,7 @@ const Pages = {
     if (grid) {
       grid.innerHTML = products.map(p => `
         <div class="product-card" style="cursor:default">
-          <div class="pc-img">${p.imagen || '📦'}</div>
+          <div class="pc-img">${Utils.escapeHtml(p.imagen || '📦')}</div>
           <div class="pc-name">${Utils.escapeHtml(p.nombre)}</div>
           <div class="pc-cat">${Utils.escapeHtml(Store.getCategory(p.categoriaId)?.nombre || '')}</div>
           <div class="pc-price">${Utils.formatMoney(p.precioVenta)}</div>
@@ -1397,7 +1399,7 @@ const Pages = {
       const status=isOpen?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>';
       const diffHtml=isOpen?'<span class="badge badge-warning">Pendiente</span>':Math.abs(diff||0)<0.005?'<span class="badge badge-success">S/ 0.00</span>':`<span class="badge ${diff<0?'badge-danger':'badge-warning'}">${diff>0?'+':''}${Utils.formatMoney(diff)}</span>`;
       return `<tr class="${isOpen?'ux-cash-row-open':''}">
-        <td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${String(c.hora||'').slice(0,5)||'—'}</small></div></td>
+        <td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${Utils.formatTime(c.hora)}</small></div></td>
         <td data-label="Usuario"><strong>${Utils.escapeHtml(c.usuarioNombre||'—')}</strong></td>
         <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(m.total)}</strong></td>
         <td data-label="Efectivo">${Utils.formatMoney(m.efectivo)}</td>
@@ -1409,7 +1411,7 @@ const Pages = {
     }).join('')||'<tr><td colspan="8">Sin registros de caja</td></tr>';
     return `<div class="page-header ux-page-head"><div><h1 class="page-title">Caja</h1><p class="ux-page-sub">Apertura, ventas y cierre de turno</p></div></div>
       ${cajaAnterior?`<div class="alert alert-warning"><strong>⚠️ Caja pendiente del ${Utils.formatDate(abierta.fecha)}</strong><br>Ciérrala antes de registrar ventas de hoy.</div>`:''}
-      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Apertura ${String(abierta.hora||'').slice(0,5)} · Inicial ${Utils.formatMoney(abierta.montoInicial||0)}`:'Abre una caja para comenzar a vender'}</p></div></div></div>
+      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Apertura ${Utils.formatTime(abierta.hora)} · Inicial ${Utils.formatMoney(abierta.montoInicial||0)}`:'Abre una caja para comenzar a vender'}</p></div></div></div>
       <div class="stat-cards ux-payment-summary"><div class="stat-card"><div class="stat-label">Total vendido</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s)</div></div><div class="stat-card"><div class="stat-label">Efectivo</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">En caja: ${Utils.formatMoney(esperado)}</div></div><div class="stat-card"><div class="stat-label">Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">${Utils.formatMoney(yape)} / ${Utils.formatMoney(plin)}</div></div><div class="stat-card"><div class="stat-label">Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos electrónicos</div></div></div>
       <div class="ux-cash-layout">
         <div class="card ux-cash-action"><h3>${abierta?'Cerrar caja':'Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Cuenta solo el dinero físico disponible en caja.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Dinero disponible antes de realizar la primera venta.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
@@ -1508,9 +1510,9 @@ const Pages = {
       <div class="modal-header"><h2>♻️ Reiniciar sistema</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
       <div class="modal-body">
         <div class="alert alert-danger"><strong>Se eliminarán los datos operativos del sistema.</strong><br>El administrador conectado será conservado.</div>
-        <label class="form-label">Contraseña de reinicio</label>
+        <label class="form-label">Contraseña actual del administrador</label>
         <input id="reset-system-password" class="form-control" type="password" autocomplete="off" placeholder="Ingresa la contraseña" onkeydown="if(event.key==='Enter') Pages.validateResetPassword()">
-        <p class="ux-help mt-2">Esta contraseña protege el botón contra reinicios accidentales.</p>
+        <p class="ux-help mt-2">Se verificará directamente con Firebase Authentication antes de borrar los datos.</p>
       </div>
       <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-danger" onclick="Pages.validateResetPassword()">Continuar</button></div>
     `, {staticBackdrop:true});
@@ -1519,11 +1521,10 @@ const Pages = {
 
   validateResetPassword() {
     const pass = document.getElementById('reset-system-password')?.value || '';
-    if (pass !== 'adminadmin') return Toast.show('Contraseña de reinicio incorrecta', 'error');
-    this._resetPassword = pass;
+    if (!pass) return Toast.show('Ingresa tu contraseña actual', 'error');
+    const adminPassword = pass;
     confirmAction('¿Confirmas que deseas borrar todos los datos del negocio y volver al modo de configuración inicial? Esta acción NO se puede deshacer.', async()=>{
-      const res = await Store.resetSystem(this._resetPassword || '');
-      this._resetPassword = '';
+      const res = await Store.resetSystem(adminPassword);
       if (!res.ok) { Toast.show(res.error, 'error'); return res; }
       SetupGuide.reset();
       App.buildNav();

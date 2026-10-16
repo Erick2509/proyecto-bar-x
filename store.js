@@ -119,35 +119,93 @@ const Store = (() => {
   async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const profile=await loadProfile(c.user.uid);if(!profile||!isActive(profile)){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=profile;await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
   async function logout(){stop();state.cart=[];state.currentUser=null;await fbAuth.signOut()}
   async function audit(accion,detalle){if(!state.currentUser)return;const t=limaParts();await db.collection('audits').add({...t,accion,detalle,usuarioId:state.currentUser.id,usuarioNombre:`${state.currentUser.nombres||''} ${state.currentUser.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});trackUsage('writes',1)}
+  async function safeAudit(accion,detalle){
+    try{await audit(accion,detalle);}
+    catch(e){console.warn('Auditoría no registrada:',accion,e);}
+  }
+  function requireAdminStore(){
+    return !!state.currentUser && state.currentUser.role === 'admin' && isActive(state.currentUser);
+  }
+  function validEmail(email){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||'')); }
   async function addUser(data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede crear empleados'};
     const email=String(data?.email||'').trim().toLowerCase(), password=String(data?.password||'');
-    if(!email)return{ok:false,error:'Ingresa un correo válido'};
+    const nombres=String(data?.nombres||'').trim(), apellidos=String(data?.apellidos||'').trim();
+    if(!validEmail(email))return{ok:false,error:'Ingresa un correo válido'};
+    if(!nombres||!apellidos)return{ok:false,error:'Nombre y apellido son obligatorios'};
     if(password.length<6)return{ok:false,error:'La contraseña debe tener al menos 6 caracteres'};
-    let secondary=null;
+    let secondary=null, createdUser=null;
     try{
       secondary=firebase.initializeApp(firebaseConfig,'userCreator-'+Date.now());
       const cred=await secondary.auth().createUserWithEmailAndPassword(email,password);
-      const user={email,role:'empleado',nombres:String(data.nombres||'').trim(),apellidos:String(data.apellidos||'').trim(),dni:String(data.dni||'').trim(),telefono:String(data.telefono||'').trim(),estado:data.estado||'Activo'};
-      await db.collection('users').doc(cred.user.uid).set(user);trackUsage('writes',1);state.users.push({id:cred.user.uid,...user});
-      await audit('CREAR_EMPLEADO',user.email);
-      return{ok:true,user:{id:cred.user.uid,...user}};
-    }catch(e){return{ok:false,error:e.message}}
-    finally{
+      createdUser=cred.user;
+      const estado=data?.estado==='Inactivo'?'Inactivo':'Activo';
+      const user={email,role:'empleado',nombres,apellidos,dni:String(data?.dni||'').trim(),telefono:String(data?.telefono||'').trim(),estado};
+      await db.collection('users').doc(createdUser.uid).set(user);
+      trackUsage('writes',1);
+      state.users.push({id:createdUser.uid,...user});
+      await safeAudit('CREAR_EMPLEADO',user.email);
+      return{ok:true,user:{id:createdUser.uid,...user}};
+    }catch(e){
+      // Si Auth creó la cuenta pero Firestore falló, eliminar la cuenta recién creada
+      // evita dejar usuarios huérfanos que luego bloqueen el mismo correo.
+      if(createdUser){ try{await createdUser.delete();}catch(_){} }
+      return{ok:false,error:e.message||'No se pudo crear el empleado'};
+    }finally{
       if(secondary){try{await secondary.auth().signOut()}catch(_){} try{await secondary.delete()}catch(_){}}
     }
   }
-  async function updateUser(id,data){try{const u=getUser(id);if(!u)return{ok:false,error:'Usuario no encontrado'};const patch={nombres:data.nombres?.trim()??u.nombres,apellidos:data.apellidos?.trim()??u.apellidos,dni:data.dni?.trim()??u.dni,telefono:data.telefono?.trim()??u.telefono,estado:data.estado??u.estado};await db.collection('users').doc(id).update(patch);trackUsage('writes',1);Object.assign(u,patch);await audit('EDITAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
+  async function updateUser(id,data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede editar empleados'};
+    try{
+      const u=getUser(id);if(!u)return{ok:false,error:'Usuario no encontrado'};
+      const nombres=String(data?.nombres??u.nombres??'').trim(), apellidos=String(data?.apellidos??u.apellidos??'').trim();
+      if(!nombres||!apellidos)return{ok:false,error:'Nombre y apellido son obligatorios'};
+      const patch={nombres,apellidos,dni:String(data?.dni??u.dni??'').trim(),telefono:String(data?.telefono??u.telefono??'').trim(),estado:data?.estado==='Inactivo'?'Inactivo':'Activo'};
+      await db.collection('users').doc(id).update(patch);trackUsage('writes',1);Object.assign(u,patch);await safeAudit('EDITAR_EMPLEADO',id);return{ok:true};
+    }catch(e){return{ok:false,error:e.message||'No se pudo editar el empleado'}}
+  }
   async function sendPasswordReset(id){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede restablecer contraseñas'};
     try{
       const u=getUser(id); if(!u?.email)return{ok:false,error:'El empleado no tiene un correo válido'};
       await fbAuth.sendPasswordResetEmail(u.email);
-      await audit('RESTABLECER_CLAVE_EMPLEADO',id);
+      await safeAudit('RESTABLECER_CLAVE_EMPLEADO',id);
       return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo enviar el enlace de restablecimiento'}}
   }
-  async function deleteUser(id){try{if(id===state.currentUser?.id)return{ok:false,error:'No puedes desactivar tu propia cuenta'};await db.collection('users').doc(id).update({estado:'Inactivo'});trackUsage('writes',1);const u=getUser(id);if(u)u.estado='Inactivo';await audit('DESACTIVAR_EMPLEADO',id);return{ok:true}}catch(e){return{ok:false,error:e.message||'No se pudo desactivar el empleado'}}}
-  async function addCategory(nombre){const id=docId(),c={nombre:nombre.trim(),estado:'Activo'};await db.collection('categories').doc(id).set(c);trackUsage('writes',1);state.categories.push({id,...c});await audit('CREAR_CATEGORIA',c.nombre);return{ok:true,category:{id,...c}}}
-  async function updateCategory(id,data){await db.collection('categories').doc(id).update(clean(data));trackUsage('writes',1);const c=getCategory(id);if(c)Object.assign(c,clean(data));await audit('EDITAR_CATEGORIA',id);return{ok:true}}
+  async function deleteUser(id){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede desactivar empleados'};
+    try{
+      if(id===state.currentUser?.id)return{ok:false,error:'No puedes desactivar tu propia cuenta'};
+      await db.collection('users').doc(id).update({estado:'Inactivo'});trackUsage('writes',1);
+      const u=getUser(id);if(u)u.estado='Inactivo';await safeAudit('DESACTIVAR_EMPLEADO',id);return{ok:true};
+    }catch(e){return{ok:false,error:e.message||'No se pudo desactivar el empleado'}}
+  }
+  async function addCategory(nombre){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede crear categorías'};
+    const n=String(nombre||'').trim();
+    if(!n)return{ok:false,error:'Ingresa el nombre de la categoría'};
+    if(state.categories.some(c=>String(c.nombre||'').trim().toLowerCase()===n.toLowerCase()))return{ok:false,error:'Ya existe una categoría con ese nombre'};
+    try{
+      const id=docId(),c={nombre:n,estado:'Activo'};
+      await db.collection('categories').doc(id).set(c);trackUsage('writes',1);
+      state.categories.push({id,...c});await safeAudit('CREAR_CATEGORIA',c.nombre);
+      return{ok:true,category:{id,...c}};
+    }catch(e){return{ok:false,error:e.message||'No se pudo crear la categoría'}}
+  }
+  async function updateCategory(id,data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede editar categorías'};
+    const c=getCategory(id); if(!c)return{ok:false,error:'Categoría no encontrada'};
+    const nombre=String(data?.nombre??c.nombre??'').trim();
+    if(!nombre)return{ok:false,error:'Ingresa el nombre de la categoría'};
+    if(state.categories.some(x=>x.id!==id&&String(x.nombre||'').trim().toLowerCase()===nombre.toLowerCase()))return{ok:false,error:'Ya existe una categoría con ese nombre'};
+    try{
+      const patch={nombre,estado:data?.estado==='Inactivo'?'Inactivo':'Activo'};
+      await db.collection('categories').doc(id).update(patch);trackUsage('writes',1);
+      Object.assign(c,patch);await safeAudit('EDITAR_CATEGORIA',id);return{ok:true};
+    }catch(e){return{ok:false,error:e.message||'No se pudo actualizar la categoría'}}
+  }
   async function deleteCategory(id){
     try{
       if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar categorías'};
@@ -164,12 +222,50 @@ const Store = (() => {
         tx.delete(ref);
       });
       trackUsage('writes',1);trackUsage('deletes',1);state.categories=state.categories.filter(x=>x.id!==id);
-      try{await audit('ELIMINAR_CATEGORIA',`${id}: ${c.nombre||''}`)}catch(err){console.warn('Auditoría categoría eliminada:',err)}
+      try{await safeAudit('ELIMINAR_CATEGORIA',`${id}: ${c.nombre||''}`)}catch(err){console.warn('Auditoría categoría eliminada:',err)}
       return{ok:true};
     }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió eliminar la categoría. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo eliminar la categoría')}}
   }
-  async function addProduct(data){const id=docId(),stock=Number(data.stock)||0,t=limaParts();const p={nombre:data.nombre.trim(),categoriaId:data.categoriaId,precioCompra:Number(data.precioCompra),precioVenta:Number(data.precioVenta),stock,stockMinimo:Number(data.stockMinimo)||0,descripcion:(data.descripcion||'').trim(),imagen:data.imagen||'📦',estado:data.estado||'Activo'};const b=db.batch();b.set(db.collection('products').doc(id),p);if(stock>0){const mid=docId();b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});}await b.commit();trackUsage('writes',1+(stock>0?1:0)+(stock>0&&p.precioCompra>0?1:0));if(!state.products.some(x=>x.id===id))state.products.push({id,...p});await audit('CREAR_PRODUCTO',p.nombre);return{ok:true,product:{id,...p}}}
-  async function updateProduct(id,data){const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};const patch={nombre:data.nombre?.trim()??p.nombre,categoriaId:data.categoriaId??p.categoriaId,precioCompra:Number(data.precioCompra??p.precioCompra),precioVenta:Number(data.precioVenta??p.precioVenta),stockMinimo:Number(data.stockMinimo??p.stockMinimo),descripcion:data.descripcion?.trim()??p.descripcion,imagen:data.imagen||p.imagen,estado:data.estado||p.estado};await db.collection('products').doc(id).update(patch);trackUsage('writes',1);Object.assign(p,patch);await audit('EDITAR_PRODUCTO',p.nombre);return{ok:true}}
+  function validateProductData(data, current=null){
+    const nombre=String(data?.nombre??current?.nombre??'').trim();
+    const categoriaId=String(data?.categoriaId??current?.categoriaId??'').trim();
+    const precioCompra=Number(data?.precioCompra??current?.precioCompra);
+    const precioVenta=Number(data?.precioVenta??current?.precioVenta);
+    const stock=Number(data?.stock??current?.stock??0);
+    const stockMinimo=Number(data?.stockMinimo??current?.stockMinimo??0);
+    if(!nombre)return{ok:false,error:'Ingresa el nombre del producto'};
+    if(!categoriaId||!getCategory(categoriaId))return{ok:false,error:'Selecciona una categoría válida'};
+    if(!Number.isFinite(precioCompra)||precioCompra<0)return{ok:false,error:'Precio de compra inválido'};
+    if(!Number.isFinite(precioVenta)||precioVenta<0)return{ok:false,error:'Precio de venta inválido'};
+    if(!Number.isFinite(stock)||stock<0||!Number.isInteger(stock))return{ok:false,error:'El stock debe ser un número entero mayor o igual a 0'};
+    if(!Number.isFinite(stockMinimo)||stockMinimo<0||!Number.isInteger(stockMinimo))return{ok:false,error:'El stock mínimo debe ser un número entero mayor o igual a 0'};
+    return{ok:true,value:{nombre,categoriaId,precioCompra,precioVenta,stock,stockMinimo,descripcion:String(data?.descripcion??current?.descripcion??'').trim(),imagen:String(data?.imagen??current?.imagen??'📦').trim()||'📦',estado:data?.estado==='Inactivo'?'Inactivo':'Activo'}};
+  }
+  async function addProduct(data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede crear productos'};
+    const v=validateProductData(data); if(!v.ok)return v;
+    try{
+      const id=docId(),t=limaParts(),p=v.value,stock=p.stock;
+      const b=db.batch();b.set(db.collection('products').doc(id),p);
+      if(stock>0){
+        const mid=docId();
+        b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});
+        if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});
+      }
+      await b.commit();trackUsage('writes',1+(stock>0?1:0)+(stock>0&&p.precioCompra>0?1:0));
+      if(!state.products.some(x=>x.id===id))state.products.push({id,...p});
+      await safeAudit('CREAR_PRODUCTO',p.nombre);return{ok:true,product:{id,...p}};
+    }catch(e){return{ok:false,error:e.message||'No se pudo crear el producto'}}
+  }
+  async function updateProduct(id,data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede editar productos'};
+    const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};
+    const v=validateProductData({...data,stock:p.stock},p); if(!v.ok)return v;
+    try{
+      const {stock,...patch}=v.value;
+      await db.collection('products').doc(id).update(patch);trackUsage('writes',1);Object.assign(p,patch);await safeAudit('EDITAR_PRODUCTO',p.nombre);return{ok:true};
+    }catch(e){return{ok:false,error:e.message||'No se pudo actualizar el producto'}}
+  }
   async function deleteProduct(id){
     try{
       if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede eliminar productos'};
@@ -185,13 +281,47 @@ const Store = (() => {
       trackUsage('writes',1+(Number(p.stock||0)>0?1:0));trackUsage('deletes',1);
       state.products=state.products.filter(x=>x.id!==id);
       state.cart=state.cart.filter(x=>x.productoId!==id);
-      try{await audit('ELIMINAR_PRODUCTO',`${id}: ${p.nombre||''}`)}catch(err){console.warn('Auditoría producto eliminado:',err)}
+      try{await safeAudit('ELIMINAR_PRODUCTO',`${id}: ${p.nombre||''}`)}catch(err){console.warn('Auditoría producto eliminado:',err)}
       return{ok:true};
     }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió eliminar el producto. Publica las reglas incluidas en esta versión.':(e.message||'No se pudo eliminar el producto')}}
   }
-  async function addMovement({productoId,tipo,cantidad,costoUnitario,motivo}){cantidad=Number(cantidad);if(cantidad<=0)return{ok:false,error:'Cantidad inválida'};const pr=db.collection('products').doc(productoId);try{await db.runTransaction(async tx=>{const s=await tx.get(pr);if(!s.exists)throw Error('Producto no encontrado');const p=s.data(),old=Number(p.stock)||0;const negative=['Salida','Merma','Ajuste -'].includes(tipo);const neu=negative?old-cantidad:old+cantidad;if(neu<0)throw Error('Stock insuficiente');const t=limaParts(),m={...t,productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:motivo||''};tx.update(pr,{stock:neu,...(tipo==='Entrada'&&Number(costoUnitario)>0?{precioCompra:Number(costoUnitario)}:{})});tx.set(db.collection('movements').doc(),m);if(tipo==='Entrada'&&Number(costoUnitario)>0)tx.set(db.collection('expenses').doc(),{...t,concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*Number(costoUnitario)).toFixed(2),origen:'Compra de stock',usuarioId:state.currentUser.id});});await audit('MOVIMIENTO_STOCK',`${tipo} ${productoId} x${cantidad}`);return{ok:true}}catch(e){return{ok:false,error:e.message}}}
-  function addToCart(productoId,qty=1){const p=getProduct(productoId);if(!p||p.estado!=='Activo'||p.stock<=0)return{ok:false,error:'Producto no disponible'};const i=state.cart.find(x=>x.productoId===productoId),n=(i?.cantidad||0)+qty;if(n>p.stock)return{ok:false,error:`Stock insuficiente (disponible: ${p.stock})`};i?i.cantidad=n:state.cart.push({productoId,cantidad:qty});return{ok:true}}
-  function updateCartQty(id,c){const p=getProduct(id);if(!p)return{ok:false};if(c<=0)state.cart=state.cart.filter(x=>x.productoId!==id);else{if(c>p.stock)return{ok:false,error:`Máximo ${p.stock} unidades`};const i=state.cart.find(x=>x.productoId===id);if(i)i.cantidad=c;}return{ok:true}}
+  async function addMovement({productoId,tipo,cantidad,costoUnitario,motivo}){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede registrar movimientos manuales'};
+    const allowed=['Entrada','Salida','Merma','Ajuste +','Ajuste -'];
+    cantidad=Number(cantidad); costoUnitario=Number(costoUnitario||0);
+    if(!allowed.includes(tipo))return{ok:false,error:'Tipo de movimiento inválido'};
+    if(!Number.isFinite(cantidad)||cantidad<=0||!Number.isInteger(cantidad))return{ok:false,error:'La cantidad debe ser un entero mayor a 0'};
+    if(!Number.isFinite(costoUnitario)||costoUnitario<0)return{ok:false,error:'Costo unitario inválido'};
+    const pr=db.collection('products').doc(productoId);
+    try{
+      await db.runTransaction(async tx=>{
+        const s=await tx.get(pr);if(!s.exists)throw Error('Producto no encontrado');
+        const p=s.data(),old=Number(p.stock)||0;const negative=['Salida','Merma','Ajuste -'].includes(tipo);const neu=negative?old-cantidad:old+cantidad;
+        if(neu<0)throw Error('Stock insuficiente');
+        const t=limaParts(),m={...t,productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:String(motivo||'').trim()};
+        tx.update(pr,{stock:neu,...(tipo==='Entrada'&&costoUnitario>0?{precioCompra:costoUnitario}:{})});
+        tx.set(db.collection('movements').doc(),m);
+        if(tipo==='Entrada'&&costoUnitario>0)tx.set(db.collection('expenses').doc(),{...t,concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*costoUnitario).toFixed(2),origen:'Compra de stock',usuarioId:state.currentUser.id});
+      });
+      await safeAudit('MOVIMIENTO_STOCK',`${tipo} ${productoId} x${cantidad}`);return{ok:true};
+    }catch(e){return{ok:false,error:e.message||'No se pudo registrar el movimiento'}}
+  }
+  function addToCart(productoId,qty=1){
+    qty=Number(qty);
+    if(!Number.isInteger(qty)||qty<=0)return{ok:false,error:'Cantidad inválida'};
+    const p=getProduct(productoId);if(!p||p.estado!=='Activo'||p.stock<=0)return{ok:false,error:'Producto no disponible'};
+    const i=state.cart.find(x=>x.productoId===productoId),n=(i?.cantidad||0)+qty;
+    if(n>p.stock)return{ok:false,error:`Stock insuficiente (disponible: ${p.stock})`};
+    i?i.cantidad=n:state.cart.push({productoId,cantidad:qty});return{ok:true};
+  }
+  function updateCartQty(id,c){
+    c=Number(c);
+    const p=getProduct(id);if(!p)return{ok:false,error:'Producto no encontrado'};
+    if(!Number.isInteger(c))return{ok:false,error:'Cantidad inválida'};
+    if(c<=0){state.cart=state.cart.filter(x=>x.productoId!==id);return{ok:true};}
+    if(c>p.stock)return{ok:false,error:`Máximo ${p.stock} unidades`};
+    const i=state.cart.find(x=>x.productoId===id);if(i)i.cantidad=c;return{ok:true};
+  }
   function removeFromCart(id){state.cart=state.cart.filter(x=>x.productoId!==id)} function clearCart(){state.cart=[]}
   function getCartTotal(){return state.cart.reduce((s,i)=>s+(getProduct(i.productoId)?.precioVenta||0)*i.cantidad,0)}
   let validatedCashId=null;
@@ -214,7 +344,48 @@ const Store = (() => {
       trackUsage('reads',1);trackUsage('writes',1);validatedCashId=caja.id;return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo validar la caja activa'}}
   }
-  async function confirmSale(metodoPago){if(!state.cart.length)return{ok:false,error:'Carrito vacío'};if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};const hoy=today();const caja=state.cashSessions.find(x=>x.usuarioId===state.currentUser.id&&x.estado==='Abierta'&&x.fecha===hoy);if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};const lock=await ensureCashLock(caja);if(!lock.ok)return lock;const saleRef=db.collection('sales').doc();try{await db.runTransaction(async tx=>{const snaps=[];for(const i of state.cart)snaps.push([i,await tx.get(db.collection('products').doc(i.productoId))]);const items=[];let total=0,costo=0;for(const [i,s] of snaps){if(!s.exists||s.data().stock<i.cantidad)throw Error(`Stock insuficiente para ${s.data()?.nombre||'producto'}`);const p=s.data(),sub=p.precioVenta*i.cantidad;items.push({productoId:s.id,nombre:p.nombre,cantidad:i.cantidad,precioUnitario:p.precioVenta,costoUnitario:p.precioCompra,subtotal:sub});total+=sub;costo+=p.precioCompra*i.cantidad;tx.update(s.ref,{stock:p.stock-i.cantidad});const t=limaParts();tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:p.nombre,tipo:'Venta',cantidad:i.cantidad,stockAnterior:p.stock,stockNuevo:p.stock-i.cantidad,usuarioId:state.currentUser.id,motivo:`Venta ${saleRef.id}`});}const t=limaParts();tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:state.currentUser.id,empleadoNombre:`${state.currentUser.nombres} ${state.currentUser.apellidos}`,cajaId:caja.id,items,total:+total.toFixed(2),costoTotal:+costo.toFixed(2),metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});});trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);state.cart=[];await audit('VENTA',saleRef.id);return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}}}catch(e){return{ok:false,error:e.message}}}
+  async function confirmSale(metodoPago){
+    const u=state.currentUser;
+    if(!u||!isActive(u))return{ok:false,error:'Sesión no válida'};
+    if(!state.cart.length)return{ok:false,error:'Carrito vacío'};
+    if(state.cart.length>100)return{ok:false,error:'La venta excede el máximo de 100 productos distintos'};
+    if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};
+    for(const i of state.cart){
+      if(!i?.productoId||!Number.isInteger(Number(i.cantidad))||Number(i.cantidad)<=0)return{ok:false,error:'El carrito contiene una cantidad inválida'};
+    }
+    const hoy=today();
+    const caja=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===hoy);
+    if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};
+    const lock=await ensureCashLock(caja);if(!lock.ok)return lock;
+    const saleRef=db.collection('sales').doc();
+    try{
+      await db.runTransaction(async tx=>{
+        const snaps=[];
+        for(const i of state.cart)snaps.push([i,await tx.get(db.collection('products').doc(i.productoId))]);
+        const items=[];let total=0,costo=0;
+        for(const [i,s] of snaps){
+          if(!s.exists)throw Error('Uno de los productos ya no existe');
+          const p=s.data(),qty=Number(i.cantidad),stock=Number(p.stock),precioVenta=Number(p.precioVenta),precioCompra=Number(p.precioCompra||0);
+          if(p.estado!=='Activo')throw Error(`${p.nombre||'Producto'} no está activo`);
+          if(!Number.isInteger(stock)||stock<qty)throw Error(`Stock insuficiente para ${p.nombre||'producto'}`);
+          if(!Number.isFinite(precioVenta)||precioVenta<0||!Number.isFinite(precioCompra)||precioCompra<0)throw Error(`Precio inválido en ${p.nombre||'producto'}`);
+          const sub=precioVenta*qty;
+          items.push({productoId:s.id,nombre:String(p.nombre||''),cantidad:qty,precioUnitario:precioVenta,costoUnitario:precioCompra,subtotal:+sub.toFixed(2)});
+          total+=sub;costo+=precioCompra*qty;
+          tx.update(s.ref,{stock:stock-qty});
+          const t=limaParts();
+          tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:String(p.nombre||''),tipo:'Venta',cantidad:qty,stockAnterior:stock,stockNuevo:stock-qty,usuarioId:u.id,motivo:`Venta ${saleRef.id}`});
+        }
+        total=+total.toFixed(2);costo=+costo.toFixed(2);
+        if(!Number.isFinite(total)||total<=0)throw Error('El total de la venta debe ser mayor a S/ 0.00');
+        const t=limaParts();
+        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,items,total,costoTotal:costo,metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+      });
+      trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);
+      state.cart=[];await safeAudit('VENTA',saleRef.id);
+      return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}};
+    }catch(e){return{ok:false,error:e.message||'No se pudo registrar la venta'}}
+  }
   async function cancelSale(id,motivo='Sin motivo'){
     motivo=String(motivo||'').trim(); if(!motivo)return{ok:false,error:'Debes indicar el motivo de anulación'};
     if(state.currentUser?.role!=='admin')return{ok:false,error:'Solo el administrador puede anular ventas'};
@@ -282,7 +453,7 @@ const Store = (() => {
         }
         tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});
       });
-      await audit('ANULAR_VENTA',`${id}: ${motivo}`);
+      await safeAudit('ANULAR_VENTA',`${id}: ${motivo}`);
       return{ok:true};
     }catch(e){
       console.error('Error anulando venta:',e);
@@ -306,7 +477,7 @@ const Store = (() => {
     try{
       const ref=await db.collection('expenses').add(payload);trackUsage('writes',1);
       if(!state.expenses.some(e=>e.id===ref.id))state.expenses.push({id:ref.id,...payload});
-      try{await audit('REGISTRAR_GASTO',`${concepto} · S/${monto.toFixed(2)}`)}catch(err){console.warn('Auditoría gasto:',err)}
+      try{await safeAudit('REGISTRAR_GASTO',`${concepto} · S/${monto.toFixed(2)}`)}catch(err){console.warn('Auditoría gasto:',err)}
       return{ok:true,id:ref.id};
     }catch(e){
       console.error('Error registrando gasto:',e);
@@ -341,7 +512,7 @@ const Store = (() => {
       });
       trackUsage('reads',1);trackUsage('writes',2);
       if(!state.cashSessions.some(x=>x.id===cashId))state.cashSessions.push({id:cashId,...t,usuarioId:u.id,usuarioNombre:payload.usuarioNombre,montoInicial:+initial.toFixed(2),estado:'Abierta'});
-      validatedCashId=cashId;try{await audit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
+      validatedCashId=cashId;try{await safeAudit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
       return{ok:true,id:cashId};
     }catch(e){
       return{ok:false,error:e?.code==='permission-denied'?'No se pudo abrir la caja. Publica las reglas Firestore incluidas en esta versión.':(e.message||'No se pudo abrir la caja')}
@@ -372,15 +543,14 @@ const Store = (() => {
         if(lockSnap.exists && lockSnap.data().cajaId===c.id)tx.delete(lockRef);
       });trackUsage('reads',2);trackUsage('writes',1);trackUsage('deletes',1);
       const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2)});
-      validatedCashId=null;await audit('CERRAR_CAJA',`Ventas día S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
+      validatedCashId=null;await safeAudit('CERRAR_CAJA',`Ventas día S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
       return{ok:true,diferencia:dif,totalVentasDia};
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
 
-  // ===== REINICIO TOTAL DEL SISTEMA v30 =====
-  // Esta clave es una segunda confirmación de interfaz. La autorización real sigue siendo
-  // el rol ADMIN de Firebase/Firestore. Al estar en una app web, la clave puede verse en el código.
-  const RESET_PASSWORD = 'adminadmin';
+  // ===== REINICIO TOTAL DEL SISTEMA v31 =====
+  // Ya no existe una clave fija en el código. Antes de borrar se reautentica al
+  // administrador con su contraseña real de Firebase Authentication.
 
   async function purgeCollection(name, preserveId = null) {
     let deleted = 0;
@@ -401,8 +571,17 @@ const Store = (() => {
 
   async function resetSystem(password) {
     const u = state.currentUser;
-    if (!u || u.role !== 'admin') return {ok:false,error:'Solo el administrador puede reiniciar el sistema'};
-    if (String(password || '') !== RESET_PASSWORD) return {ok:false,error:'Contraseña de reinicio incorrecta'};
+    if (!u || u.role !== 'admin' || !isActive(u)) return {ok:false,error:'Solo el administrador puede reiniciar el sistema'};
+    const authUser=fbAuth.currentUser;
+    if(!authUser||authUser.uid!==u.id||!authUser.email)return{ok:false,error:'No se pudo validar la sesión del administrador'};
+    const pass=String(password||'');
+    if(!pass)return{ok:false,error:'Ingresa tu contraseña actual'};
+    try{
+      const credential=firebase.auth.EmailAuthProvider.credential(authUser.email,pass);
+      await authUser.reauthenticateWithCredential(credential);
+    }catch(e){
+      return{ok:false,error:'La contraseña actual del administrador es incorrecta'};
+    }
 
     const adminId = u.id;
     const counts = {};
@@ -445,7 +624,7 @@ const Store = (() => {
       // Intentar recuperar listeners aun si una colección falló a mitad del proceso.
       try { coreLoadedFor = null; await loadData(); } catch (_) {}
       return {ok:false,error:e?.code==='permission-denied'
-        ? 'Firestore rechazó el reinicio. Publica las reglas v30 antes de usar esta función.'
+        ? 'Firestore rechazó el reinicio. Publica las reglas v31 antes de usar esta función.'
         : (e.message || 'No se pudo reiniciar completamente el sistema')};
     }
   }

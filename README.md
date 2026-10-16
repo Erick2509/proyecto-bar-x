@@ -1,5 +1,21 @@
 # PROYECTO X — Firebase + HTML/CSS/JS + Bootstrap
 
+
+## v32 - Ventas divididas, filtros y Caja mejorada
+
+- Módulo visible **Inventario**.
+- Pago por separado en dos medios de pago.
+- CRUD de gastos manuales y filtros por rango.
+- Filtros por rango en movimientos e historial de ventas.
+- Totales dinámicos según filtros.
+- Monto inicial de Caja separado de ventas.
+- Dashboard por medios de pago.
+- Precio de compra maestro preservado en nuevas entradas de stock.
+- Selector ampliado con más de 300 emojis y entrada libre.
+- Caché PWA `proyecto-x-v32`.
+
+Consulta `CAMBIOS_V32.md`, `PRUEBAS_V32.md` y `GUIA_INICIO_V32.md`.
+
 ## Configuración
 1. Crea un proyecto Firebase y una app Web.
 2. Activa **Authentication > Email/Password** y **Firestore Database**.
@@ -19,7 +35,7 @@
 ## Incluye
 - Firebase Authentication y Firestore en lugar de localStorage.
 - Roles Admin/Empleado.
-- Productos, categorías, stock y stock mínimo.
+- Inventario, categorías, stock y stock mínimo.
 - Entradas, salidas, mermas y ajustes +/-.
 - Ventas con snapshot del producto/costo y stock transaccional.
 - Efectivo, Yape, Plin y tarjeta.

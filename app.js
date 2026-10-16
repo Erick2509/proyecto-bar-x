@@ -72,7 +72,7 @@ const SetupGuide = {
   reason(page) {
     const s = this.snapshot();
     if (page === 'productos' && !s.hasCategory) return 'Primero crea al menos una categoría.';
-    if (['movimientos','empleados'].includes(page) && !s.hasProduct) return 'Primero crea al menos un producto.';
+    if (['movimientos','empleados'].includes(page) && !s.hasProduct) return 'Primero registra al menos un producto en Inventario.';
     if (page === 'caja' && !s.hasStock) return 'Primero agrega stock a por lo menos un producto.';
     if (page === 'ventas' && !s.cashOpened) return 'Primero abre una caja desde el paso de Caja.';
     if (['historial','gastos','reportes'].includes(page) && !s.saleReady) return 'Completa u omite la venta de prueba para habilitar este apartado.';
@@ -307,7 +307,7 @@ const App = {
       { page: 'dashboard', icon: '📊', label: 'Dashboard' },
       { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
       { page: 'caja', icon: '💰', label: 'Caja' },
-      { page: 'productos', icon: '🏷️', label: 'Productos' },
+      { page: 'productos', icon: '📦', label: 'Inventario' },
       { page: 'categorias', icon: '📂', label: 'Categorías' },
       { page: 'movimientos', icon: '🔄', label: 'Movimientos' },
       { page: 'gastos', icon: '💸', label: 'Gastos' },
@@ -319,7 +319,7 @@ const App = {
       { page: 'inicio', icon: '🏠', label: 'Inicio' },
       { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
       { page: 'historial', icon: '🧾', label: 'Mis ventas' },
-      { page: 'productosDisponibles', icon: '📦', label: 'Productos disponibles' },
+      { page: 'productosDisponibles', icon: '📦', label: 'Inventario disponible' },
       { page: 'caja', icon: '💰', label: 'Mi caja' }
     ];
 
@@ -340,7 +340,7 @@ const App = {
           { page: 'dashboard', icon: '📊', label: 'Inicio' },
           { page: 'ventas', icon: '🛒', label: 'Vender' },
           { page: 'caja', icon: '💰', label: 'Caja' },
-          { page: 'productos', icon: '🏷️', label: 'Productos' }
+          { page: 'productos', icon: '📦', label: 'Inventario' }
         ]
       : [
           { page: 'inicio', icon: '🏠', label: 'Inicio' },

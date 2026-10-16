@@ -7,11 +7,34 @@ service cloud.firestore {
     function me() { return get(myPath()); }
     function active() { return hasProfile() && (me().data.estado == 'activo' || me().data.estado == 'Activo'); }
     function admin() { return active() && me().data.role == 'admin'; }
-    function validPayment(m) { return m in ['Efectivo','Yape','Plin','Tarjeta']; }
     function positiveNumber(v) { return (v is int || v is float) && v >= 0; }
     function strictPositive(v) { return (v is int || v is float) && v > 0; }
     function nonNegativeInt(v) { return v is int && v >= 0; }
     function positiveInt(v) { return v is int && v > 0; }
+    function validPayment(m) { return m in ['Efectivo','Yape','Plin','Tarjeta']; }
+    function validPaymentPart(p) {
+      return p is map
+        && p.keys().hasOnly(['metodo','monto'])
+        && validPayment(p.metodo)
+        && strictPositive(p.monto);
+    }
+    function validSalePayments(d) {
+      return d.pagos is list
+        && (
+          (d.pagos.size() == 1
+            && validPaymentPart(d.pagos[0])
+            && d.metodoPago == d.pagos[0].metodo
+            && d.pagos[0].monto == d.total)
+          ||
+          (d.pagos.size() == 2
+            && validPaymentPart(d.pagos[0])
+            && validPaymentPart(d.pagos[1])
+            && d.pagos[0].metodo != d.pagos[1].metodo
+            && d.metodoPago == 'Pago separado'
+            && d.pagos[0].monto + d.pagos[1].monto >= d.total - 0.011
+            && d.pagos[0].monto + d.pagos[1].monto <= d.total + 0.011)
+        );
+    }
     function validDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
     function validTime(v) { return v is string && v.matches('^[0-9]{2}:[0-9]{2}:[0-9]{2}$'); }
     function shortText(v, maxLen) { return v is string && v.size() <= maxLen; }
@@ -31,7 +54,7 @@ service cloud.firestore {
         && shortText(request.resource.data.dni, 30)
         && shortText(request.resource.data.telefono, 40)
         && validStatus(request.resource.data.estado);
-      // v31: el administrador puede borrar perfiles de empleados durante el reinicio, nunca el suyo.
+      // v32: el administrador puede borrar perfiles de empleados durante el reinicio, nunca el suyo.
       allow delete: if admin() && uid != request.auth.uid;
     }
     match /categories/{id} {
@@ -81,7 +104,7 @@ service cloud.firestore {
     match /sales/{id} {
       allow read: if admin() || (active() && resource.data.empleadoId == request.auth.uid);
       allow create: if active()
-        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','items','total','costoTotal','metodoPago','estado','createdAt'])
+        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','items','total','costoTotal','metodoPago','pagos','estado','createdAt'])
         && request.resource.data.empleadoId == request.auth.uid
         && request.resource.data.numero is string
         && request.resource.data.numero.matches('^V-[A-Z0-9]{6}$')
@@ -98,7 +121,7 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/cashLocks/$(request.auth.uid))
         && get(/databases/$(database)/documents/cashLocks/$(request.auth.uid)).data.cajaId == request.resource.data.cajaId
         && request.resource.data.estado == 'Completada'
-        && validPayment(request.resource.data.metodoPago)
+        && validSalePayments(request.resource.data)
         && strictPositive(request.resource.data.total)
         && positiveNumber(request.resource.data.costoTotal)
         && request.resource.data.items is list

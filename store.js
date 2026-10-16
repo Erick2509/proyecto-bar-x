@@ -57,6 +57,37 @@ const Store = (() => {
   }
   function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
   function monthStart(){ return usageDate().slice(0,7)+'-01'; }
+  function validDateRange(desde,hasta){
+    desde=String(desde||''); hasta=String(hasta||'');
+    return /^\d{4}-\d{2}-\d{2}$/.test(desde) && /^\d{4}-\d{2}-\d{2}$/.test(hasta) && desde<=hasta;
+  }
+  function datesInRange(desde,hasta,maxDays=366){
+    if(!validDateRange(desde,hasta))return[];
+    const out=[], start=new Date(desde+'T12:00:00Z'), end=new Date(hasta+'T12:00:00Z'), d=new Date(start);
+    for(;d<=end && out.length<maxDays;d.setUTCDate(d.getUTCDate()+1))out.push(d.toISOString().slice(0,10));
+    return d<=end?[]:out;
+  }
+  function getSalePayments(sale){
+    const allowed=['Efectivo','Yape','Plin','Tarjeta'];
+    const pagos=Array.isArray(sale?.pagos)?sale.pagos
+      .map(p=>({metodo:String(p?.metodo||''),monto:+Number(p?.monto||0).toFixed(2)}))
+      .filter(p=>allowed.includes(p.metodo)&&Number.isFinite(p.monto)&&p.monto>0):[];
+    if(pagos.length)return pagos;
+    const metodo=String(sale?.metodoPago||'');
+    const total=+Number(sale?.total||0).toFixed(2);
+    return allowed.includes(metodo)&&total>0?[{metodo,monto:total}]:[];
+  }
+  function paymentTotals(sales){
+    const out={Efectivo:0,Yape:0,Plin:0,Tarjeta:0};
+    (sales||[]).forEach(s=>getSalePayments(s).forEach(p=>{out[p.metodo]=+(out[p.metodo]+Number(p.monto||0)).toFixed(2)}));
+    return out;
+  }
+  function salePaymentLabel(sale){
+    const pagos=getSalePayments(sale);
+    if(!pagos.length)return String(sale?.metodoPago||'—');
+    if(pagos.length===1)return pagos[0].metodo;
+    return pagos.map(p=>`${p.metodo} S/${Number(p.monto||0).toFixed(2)}`).join(' + ');
+  }
   async function loadData(){
     const u=state.currentUser, d=usageDate(); if(!u)return;
     if(coreLoadedFor===u.id && refs.productsLive && refs.todaySales && refs.openCash)return;
@@ -75,11 +106,11 @@ const Store = (() => {
   }
   async function loadUsers(){ return fetchInto('users',db.collection('users'),{replace:true,cacheKey:'users',ttl:900000}); }
   async function loadSalesHistory(){
-    const u=state.currentUser; if(!u)return; const start=daysAgo(31);
-    if(u.role==='admin') return fetchInto('sales',db.collection('sales').where('fecha','>=',start).orderBy('fecha','desc').limit(250),{cacheKey:'salesHistory',ttl:300000});
-    // Para empleados consultamos por días: evita descargar años de ventas y no requiere índices complejos.
+    const u=state.currentUser; if(!u)return; const start=daysAgo(30);
+    if(u.role==='admin') return fetchInto('sales',db.collection('sales').where('fecha','>=',start).orderBy('fecha','desc'),{cacheKey:'salesHistory',ttl:300000});
+    // Para empleados consultamos 31 días por fecha exacta para mantener compatibilidad con reglas e índices simples.
     if(loadedAt.salesHistory && Date.now()-loadedAt.salesHistory<300000)return{ok:true,cached:true};
-    for(let i=0;i<14;i++){ const date=daysAgo(i); await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000}); }
+    for(let i=0;i<=30;i++){ const date=daysAgo(i); await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000}); }
     loadedAt.salesHistory=Date.now(); return{ok:true};
   }
   async function loadSalesForDate(date){
@@ -87,8 +118,27 @@ const Store = (() => {
     const u=state.currentUser; let q=db.collection('sales').where('fecha','==',date); if(u?.role!=='admin')q=q.where('empleadoId','==',u.id);
     return fetchInto('sales',q,{cacheKey:'salesDate:'+date,ttl:600000});
   }
-  async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(31)).orderBy('fecha','desc').limit(250),{cacheKey:'expensesHistory',ttl:300000}); }
-  async function loadMovements(){ return fetchInto('movements',db.collection('movements').where('fecha','>=',daysAgo(31)).orderBy('fecha','desc').limit(250),{cacheKey:'movements',ttl:300000}); }
+  async function loadSalesForRange(desde,hasta){
+    if(!validDateRange(desde,hasta))return{ok:false,error:'Rango de fechas inválido'};
+    const u=state.currentUser;if(!u)return{ok:false,error:'Sesión no válida'};
+    if(u.role==='admin'){
+      return fetchInto('sales',db.collection('sales').where('fecha','>=',desde).where('fecha','<=',hasta).orderBy('fecha','desc'),{cacheKey:`salesRange:${desde}:${hasta}`,ttl:300000});
+    }
+    const dates=datesInRange(desde,hasta,366);
+    if(!dates.length)return{ok:false,error:'El rango solicitado es demasiado amplio'};
+    for(const date of dates)await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000});
+    return{ok:true};
+  }
+  async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(30)).orderBy('fecha','desc'),{cacheKey:'expensesHistory',ttl:300000}); }
+  async function loadExpensesForRange(desde,hasta){
+    if(!validDateRange(desde,hasta))return{ok:false,error:'Rango de fechas inválido'};
+    return fetchInto('expenses',db.collection('expenses').where('fecha','>=',desde).where('fecha','<=',hasta).orderBy('fecha','desc'),{cacheKey:`expensesRange:${desde}:${hasta}`,ttl:300000});
+  }
+  async function loadMovements(){ return fetchInto('movements',db.collection('movements').where('fecha','>=',daysAgo(30)).orderBy('fecha','desc'),{cacheKey:'movements',ttl:300000}); }
+  async function loadMovementsForRange(desde,hasta){
+    if(!validDateRange(desde,hasta))return{ok:false,error:'Rango de fechas inválido'};
+    return fetchInto('movements',db.collection('movements').where('fecha','>=',desde).where('fecha','<=',hasta).orderBy('fecha','desc'),{cacheKey:`movementsRange:${desde}:${hasta}`,ttl:300000});
+  }
   async function loadCashHistory(){
     const u=state.currentUser; if(!u)return;
     if(u.role==='admin') return fetchInto('cashSessions',db.collection('cashSessions').where('fecha','>=',daysAgo(45)).orderBy('fecha','desc').limit(80),{cacheKey:'cashHistory',ttl:300000});
@@ -299,7 +349,8 @@ const Store = (() => {
         const p=s.data(),old=Number(p.stock)||0;const negative=['Salida','Merma','Ajuste -'].includes(tipo);const neu=negative?old-cantidad:old+cantidad;
         if(neu<0)throw Error('Stock insuficiente');
         const t=limaParts(),m={...t,productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:String(motivo||'').trim()};
-        tx.update(pr,{stock:neu,...(tipo==='Entrada'&&costoUnitario>0?{precioCompra:costoUnitario}:{})});
+        // El precio de compra maestro del inventario se conserva. Un ingreso de stock puede tener un costo puntual distinto sin sobrescribirlo.
+        tx.update(pr,{stock:neu});
         tx.set(db.collection('movements').doc(),m);
         if(tipo==='Entrada'&&costoUnitario>0)tx.set(db.collection('expenses').doc(),{...t,concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*costoUnitario).toFixed(2),origen:'Compra de stock',usuarioId:state.currentUser.id});
       });
@@ -344,12 +395,25 @@ const Store = (() => {
       trackUsage('reads',1);trackUsage('writes',1);validatedCashId=caja.id;return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo validar la caja activa'}}
   }
-  async function confirmSale(metodoPago){
+  async function confirmSale(paymentInput){
     const u=state.currentUser;
     if(!u||!isActive(u))return{ok:false,error:'Sesión no válida'};
     if(!state.cart.length)return{ok:false,error:'Carrito vacío'};
     if(state.cart.length>100)return{ok:false,error:'La venta excede el máximo de 100 productos distintos'};
-    if(!['Efectivo','Yape','Plin','Tarjeta'].includes(metodoPago))return{ok:false,error:'Método de pago inválido'};
+    const allowed=['Efectivo','Yape','Plin','Tarjeta'];
+    const split=Array.isArray(paymentInput);
+    let requestedPayments=[];
+    if(split){
+      requestedPayments=paymentInput.map(p=>({metodo:String(p?.metodo||''),monto:+Number(p?.monto||0).toFixed(2)}));
+      if(requestedPayments.length!==2)return{ok:false,error:'El pago por separado debe tener exactamente 2 partes'};
+      if(requestedPayments.some(p=>!allowed.includes(p.metodo)))return{ok:false,error:'Uno de los métodos de pago no es válido'};
+      if(requestedPayments[0].metodo===requestedPayments[1].metodo)return{ok:false,error:'Selecciona dos métodos de pago diferentes'};
+      if(requestedPayments.some(p=>!Number.isFinite(p.monto)||p.monto<=0))return{ok:false,error:'Cada parte del pago debe ser mayor a S/ 0.00'};
+    }else{
+      const metodo=String(paymentInput||'');
+      if(!allowed.includes(metodo))return{ok:false,error:'Método de pago inválido'};
+      requestedPayments=[{metodo,monto:null}];
+    }
     for(const i of state.cart){
       if(!i?.productoId||!Number.isInteger(Number(i.cantidad))||Number(i.cantidad)<=0)return{ok:false,error:'El carrito contiene una cantidad inválida'};
     }
@@ -358,6 +422,7 @@ const Store = (() => {
     if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};
     const lock=await ensureCashLock(caja);if(!lock.ok)return lock;
     const saleRef=db.collection('sales').doc();
+    let savedPayments=[],savedMethod='';
     try{
       await db.runTransaction(async tx=>{
         const snaps=[];
@@ -378,12 +443,21 @@ const Store = (() => {
         }
         total=+total.toFixed(2);costo=+costo.toFixed(2);
         if(!Number.isFinite(total)||total<=0)throw Error('El total de la venta debe ser mayor a S/ 0.00');
+        if(split){
+          const paymentTotal=+requestedPayments.reduce((a,p)=>a+Number(p.monto||0),0).toFixed(2);
+          if(Math.abs(paymentTotal-total)>0.009)throw Error(`Las dos partes deben sumar exactamente ${total.toFixed(2)}`);
+          savedPayments=requestedPayments.map(p=>({metodo:p.metodo,monto:+p.monto.toFixed(2)}));
+          savedMethod='Pago separado';
+        }else{
+          savedPayments=[{metodo:requestedPayments[0].metodo,monto:total}];
+          savedMethod=requestedPayments[0].metodo;
+        }
         const t=limaParts();
-        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,items,total,costoTotal:costo,metodoPago,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,items,total,costoTotal:costo,metodoPago:savedMethod,pagos:savedPayments,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
       trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);
-      state.cart=[];await safeAudit('VENTA',saleRef.id);
-      return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago}};
+      state.cart=[];await safeAudit('VENTA',`${saleRef.id} · ${savedPayments.map(p=>`${p.metodo} S/${p.monto.toFixed(2)}`).join(' + ')}`);
+      return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago:savedMethod,pagos:savedPayments}};
     }catch(e){return{ok:false,error:e.message||'No se pudo registrar la venta'}}
   }
   async function cancelSale(id,motivo='Sin motivo'){
@@ -432,9 +506,11 @@ const Store = (() => {
           }
         }
 
-        // Si la caja ya fue cerrada, mantener su resumen contable consistente.
+        // Si la caja ya fue cerrada, mantener su resumen contable consistente, incluso en pagos separados.
         if(cashSnap?.exists && cashSnap.data().estado==='Cerrada'){
-          const c=cashSnap.data(), total=Number(sale.total||0), metodo=sale.metodoPago;
+          const c=cashSnap.data(), total=Number(sale.total||0), pagos=getSalePayments(sale);
+          const pagoPorMetodo={Efectivo:0,Yape:0,Plin:0,Tarjeta:0};
+          pagos.forEach(p=>{pagoPorMetodo[p.metodo]+=Number(p.monto||0)});
           const patch={
             totalVentasDia:+Math.max(0,Number(c.totalVentasDia||0)-total).toFixed(2),
             cantidadVentasDia:Math.max(0,Number(c.cantidadVentasDia||0)-1),
@@ -443,10 +519,13 @@ const Store = (() => {
             ultimaAnulacionFecha:t.fecha,
             ultimaAnulacionHora:t.hora
           };
-          const field={Efectivo:'efectivoVentas',Yape:'yapeVentas',Plin:'plinVentas',Tarjeta:'tarjetaVentas'}[metodo];
-          if(field) patch[field]=+Math.max(0,Number(c[field]||0)-total).toFixed(2);
-          if(metodo==='Efectivo'){
-            patch.esperado=+Math.max(0,Number(c.esperado||0)-total).toFixed(2);
+          const fields={Efectivo:'efectivoVentas',Yape:'yapeVentas',Plin:'plinVentas',Tarjeta:'tarjetaVentas'};
+          Object.entries(fields).forEach(([metodo,field])=>{
+            const amount=Number(pagoPorMetodo[metodo]||0);
+            if(amount>0)patch[field]=+Math.max(0,Number(c[field]||0)-amount).toFixed(2);
+          });
+          if(pagoPorMetodo.Efectivo>0){
+            patch.esperado=+Math.max(0,Number(c.esperado||0)-pagoPorMetodo.Efectivo).toFixed(2);
             patch.diferencia=+(Number(c.real||0)-patch.esperado).toFixed(2);
           }
           tx.update(cashRef,patch);
@@ -483,6 +562,36 @@ const Store = (() => {
       console.error('Error registrando gasto:',e);
       return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió registrar el gasto. Verifica que ingresaste como administrador y que las reglas estén publicadas.':(e.message||'No se pudo registrar el gasto')};
     }
+  }
+
+  async function updateExpense(id,data){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede editar gastos'};
+    const e=state.expenses.find(x=>x.id===id);if(!e)return{ok:false,error:'Gasto no encontrado'};
+    if(String(e.origen||'Manual')!=='Manual')return{ok:false,error:'Los gastos automáticos de inventario no se editan para conservar la trazabilidad'};
+    const concepto=String(data?.concepto??e.concepto??'').trim();
+    const categoria=String(data?.categoria??e.categoria??'Otros').trim();
+    const monto=Number(data?.monto??e.monto);
+    const permitidas=['Alquiler','Servicios','Personal','Mantenimiento','Otros'];
+    if(!concepto)return{ok:false,error:'Ingresa el concepto del gasto'};
+    if(!permitidas.includes(categoria))return{ok:false,error:'Selecciona una categoría válida'};
+    if(!Number.isFinite(monto)||monto<=0)return{ok:false,error:'Ingresa un monto válido mayor a S/ 0.00'};
+    const patch={concepto,categoria,monto:+monto.toFixed(2)};
+    try{
+      await db.collection('expenses').doc(id).update(patch);Object.assign(e,patch);
+      await safeAudit('EDITAR_GASTO',`${id}: ${concepto} · S/${monto.toFixed(2)}`);
+      return{ok:true};
+    }catch(err){return{ok:false,error:err.message||'No se pudo editar el gasto'}}
+  }
+  async function deleteExpense(id){
+    if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede eliminar gastos'};
+    const e=state.expenses.find(x=>x.id===id);if(!e)return{ok:false,error:'Gasto no encontrado'};
+    if(String(e.origen||'Manual')!=='Manual')return{ok:false,error:'Los gastos automáticos de inventario no se eliminan para conservar la trazabilidad'};
+    try{
+      await db.collection('expenses').doc(id).delete();
+      state.expenses=state.expenses.filter(x=>x.id!==id);
+      await safeAudit('ELIMINAR_GASTO',`${id}: ${e.concepto||''} · S/${Number(e.monto||0).toFixed(2)}`);
+      return{ok:true};
+    }catch(err){return{ok:false,error:err.message||'No se pudo eliminar el gasto'}}
   }
 
   function today(){return limaParts().fecha} function salesToday(){return state.sales.filter(s=>s.fecha===today()&&s.estado!=='Anulada')} function expensesToday(){return state.expenses.filter(e=>e.fecha===today())} function totalSales(fn){return (fn?state.sales.filter(fn):state.sales).filter(s=>s.estado!=='Anulada').reduce((a,b)=>a+Number(b.total||0),0)} function totalExpenses(fn){return(fn?state.expenses.filter(fn):state.expenses).reduce((a,b)=>a+Number(b.monto||0),0)}
@@ -531,9 +640,9 @@ const Store = (() => {
         ventas=qs.docs.map(d=>({id:d.id,...d.data()})).filter(s=>s.estado!=='Anulada');
         trackUsage('reads',qs.size,ventas);
       }
-      const sum=m=>ventas.filter(s=>String(s.metodoPago||'').trim().toLowerCase()===m.toLowerCase()).reduce((a,b)=>a+Number(b.total||0),0);
-      const efectivo=sum('Efectivo'),yape=sum('Yape'),plin=sum('Plin'),tarjeta=sum('Tarjeta');
-      const totalVentasDia=efectivo+yape+plin+tarjeta,esperado=Number(c.montoInicial||0)+efectivo,dif=real-esperado,t=limaParts();
+      const pay=paymentTotals(ventas);
+      const efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta;
+      const totalVentasDia=+(efectivo+yape+plin+tarjeta).toFixed(2),esperado=+(Number(c.montoInicial||0)+efectivo).toFixed(2),dif=+(real-esperado).toFixed(2),t=limaParts();
       const ref=db.collection('cashSessions').doc(c.id), lockRef=db.collection('cashLocks').doc(u.id);
       await db.runTransaction(async tx=>{
         const snap=await tx.get(ref);
@@ -548,7 +657,7 @@ const Store = (() => {
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
 
-  // ===== REINICIO TOTAL DEL SISTEMA v31 =====
+  // ===== REINICIO TOTAL DEL SISTEMA v32 =====
   // Ya no existe una clave fija en el código. Antes de borrar se reautentica al
   // administrador con su contraseña real de Firebase Authentication.
 
@@ -629,5 +738,5 @@ const Store = (() => {
     }
   }
 
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,loadSalesForRange,loadExpensesForRange,loadMovementsForRange,daysAgo,getSalePayments,paymentTotals,salePaymentLabel,updateExpense:(...a)=>guarded('updateExpense:'+a[0],()=>updateExpense(...a)),deleteExpense:(...a)=>guarded('deleteExpense:'+a[0],()=>deleteExpense(...a)),resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
 })();

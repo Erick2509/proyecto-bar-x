@@ -117,7 +117,8 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId))
         && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
         && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.estado == 'Abierta'
-        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.fecha == request.resource.data.fecha
+        // La caja puede atravesar medianoche. La venta conserva su fecha real,
+        // pero sigue vinculada a la misma sesión abierta por cajaId.
         && exists(/databases/$(database)/documents/cashLocks/$(request.auth.uid))
         && get(/databases/$(database)/documents/cashLocks/$(request.auth.uid)).data.cajaId == request.resource.data.cajaId
         && request.resource.data.estado == 'Completada'

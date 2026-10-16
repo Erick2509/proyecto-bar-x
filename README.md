@@ -1,7 +1,7 @@
 # PROYECTO X — Firebase + HTML/CSS/JS + Bootstrap
 
 
-## v32 - Ventas divididas, filtros y Caja mejorada
+## v33 - Totales dinámicos + caja continua durante la madrugada
 
 - Módulo visible **Inventario**.
 - Pago por separado en dos medios de pago.
@@ -12,9 +12,19 @@
 - Dashboard por medios de pago.
 - Precio de compra maestro preservado en nuevas entradas de stock.
 - Selector ampliado con más de 300 emojis y entrada libre.
-- Caché PWA `proyecto-x-v32`.
+- Caché PWA `proyecto-x-v33`.
 
-Consulta `CAMBIOS_V32.md`, `PRUEBAS_V32.md` y `GUIA_INICIO_V32.md`.
+Consulta `CAMBIOS_V33.md`, `PRUEBAS_V33.md` y `GUIA_INICIO_V32.md`.
+
+
+### Cambios clave de v33
+- Historial de ventas: el total se recalcula con cada filtro de fecha, búsqueda y método.
+- Si se filtra por un método de pago, los pagos divididos suman únicamente la parte correspondiente a ese método.
+- Gastos: el total y la cantidad de registros se recalculan con cada filtro y rango de fechas.
+- Caja continua: no se cierra por cambio de fecha. Puede abrirse en la noche y cerrarse al finalizar la atención del día siguiente.
+- El cierre de caja suma todas las ventas vinculadas a esa sesión mediante `cajaId`, sin importar la fecha de cada venta.
+- La interfaz de Caja explica el flujo en 3 pasos y avisa claramente cuando una sesión atravesó medianoche.
+- El sistema detecta el cambio de día y cambia automáticamente los datos "de hoy" sin cerrar la caja.
 
 ## Configuración
 1. Crea un proyecto Firebase y una app Web.
@@ -71,7 +81,7 @@ Todas las tablas se reorganizan como tarjetas verticales en pantallas de hasta 7
 
 ## v15 - Corrección apertura de caja
 - Corrige la primera apertura de caja para empleados: se eliminó la lectura transaccional de un documento inexistente que Firestore rechazaba.
-- Mantiene un único documento de caja por usuario y fecha.
+- Mantiene una única caja abierta por usuario. La sesión puede cruzar medianoche y continúa hasta que se cierre manualmente.
 - Las reglas impiden reabrir/sobrescribir una caja existente y solo permiten Abierta → Cerrada.
 - La auditoría no hace fallar una apertura que ya se realizó correctamente.
 - Caché PWA actualizado a proyecto-x-v15.

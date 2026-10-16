@@ -175,6 +175,7 @@ const Router = {
 
 const App = {
   refreshPending: false,
+  dayWatchTimer: null,
 
   isInteracting() {
     const overlay = document.getElementById('modal-overlay');
@@ -200,6 +201,27 @@ const App = {
     if (Auth.isLoggedIn() && Router.current) Router.go(Router.current, { preserveScroll: true });
   },
 
+  startDayWatch() {
+    if (this.dayWatchTimer) clearInterval(this.dayWatchTimer);
+    this.dayWatchTimer = setInterval(async () => {
+      if (!Auth.isLoggedIn() || !Store.refreshDailyContext) return;
+      try {
+        const r = await Store.refreshDailyContext();
+        if (r?.changed) {
+          const u=Auth.currentUser();
+          const open=Store.state.cashSessions.some(c=>c.usuarioId===u?.id&&c.estado==='Abierta');
+          Toast.show(open?'🌙 Cambió el día. Tu caja sigue abierta y puedes continuar vendiendo.':'📅 Nuevo día detectado. Los indicadores de hoy ya se actualizaron.');
+          this.requestRefresh();
+        }
+      } catch (e) { console.warn('Cambio de día:', e); }
+    }, 60000);
+  },
+
+  stopDayWatch() {
+    if (this.dayWatchTimer) clearInterval(this.dayWatchTimer);
+    this.dayWatchTimer = null;
+  },
+
   async init() {
     await Store.load();
     this.bindLogin();
@@ -207,6 +229,7 @@ const App = {
 
     if (Auth.isLoggedIn()) {
       this.showApp();
+      this.startDayWatch();
       Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
     } else {
       this.showLogin();
@@ -239,6 +262,7 @@ const App = {
       }
       err.classList.add('hidden');
       this.showApp();
+      this.startDayWatch();
       Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
       Toast.show(`Bienvenido, ${res.user.nombres || res.user.nombre || 'Usuario'}`);
     });
@@ -253,6 +277,7 @@ const App = {
     document.addEventListener('focusout', () => setTimeout(() => this.flushPendingRefresh(), 0));
 
     document.getElementById('btn-logout')?.addEventListener('click', async () => {
+      this.stopDayWatch();
       await Store.logout();
       this.showLogin();
       Toast.show('Sesión cerrada');

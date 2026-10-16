@@ -27,6 +27,7 @@ const Store = (() => {
   // se consultan bajo demanda y con límites para evitar descargar toda la base en cada inicio.
   const loadedAt = {};
   let coreLoadedFor = null;
+  let liveBusinessDate = null;
   // v30: se retiró el monitor local anterior. trackUsage queda como no-op por compatibilidad interna.
   function usageDate(){ return limaParts().fecha; }
   function trackUsage(){ /* intencionalmente vacío */ }
@@ -88,21 +89,33 @@ const Store = (() => {
     if(pagos.length===1)return pagos[0].metodo;
     return pagos.map(p=>`${p.metodo} S/${Number(p.monto||0).toFixed(2)}`).join(' + ');
   }
-  async function loadData(){
-    const u=state.currentUser, d=usageDate(); if(!u)return;
-    if(coreLoadedFor===u.id && refs.productsLive && refs.todaySales && refs.openCash)return;
-    coreLoadedFor=u.id;
-    // Categorías cambian poco: una sola lectura por sesión, sin listener permanente.
-    const cats=fetchInto('categories',db.collection('categories'),{replace:true,cacheKey:'categories',ttl:1800000});
-    // Stock sí necesita tiempo real para evitar vender con una pantalla desactualizada.
-    const products=listenScoped('productsLive','products',db.collection('products'),{replace:true});
+  async function bindDailyListeners(force=false){
+    const u=state.currentUser, d=usageDate(); if(!u)return{ok:false,error:'Sesión no válida'};
+    if(!force && liveBusinessDate===d && refs.todaySales)return{ok:true,changed:false,date:d};
+    const previous=liveBusinessDate;
+    liveBusinessDate=d;
     const saleQuery=u.role==='admin'?db.collection('sales').where('fecha','==',d):db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',d);
-    const sales=listenScoped('todaySales','sales',saleQuery,{predicate:x=>x.fecha===d&&(u.role==='admin'||x.empleadoId===u.id)});
-    const cashQuery=db.collection('cashSessions').where('usuarioId','==',u.id).where('estado','==','Abierta');
-    const cash=listenScoped('openCash','cashSessions',cashQuery,{predicate:x=>x.usuarioId===u.id&&x.estado==='Abierta'});
-    const tasks=[cats,products,sales,cash];
+    const tasks=[listenScoped('todaySales','sales',saleQuery,{predicate:x=>x.fecha===d&&(u.role==='admin'||x.empleadoId===u.id)})];
     if(u.role==='admin') tasks.push(listenScoped('todayExpenses','expenses',db.collection('expenses').where('fecha','==',d),{predicate:x=>x.fecha===d}));
     await Promise.all(tasks);
+    return{ok:true,changed:!!previous&&previous!==d,date:d};
+  }
+  async function refreshDailyContext(){ return bindDailyListeners(false); }
+  async function loadData(){
+    const u=state.currentUser; if(!u)return;
+    const alreadyCore=coreLoadedFor===u.id && refs.productsLive && refs.openCash;
+    if(!alreadyCore){
+      coreLoadedFor=u.id;
+      // Categorías cambian poco: una sola lectura por sesión, sin listener permanente.
+      const cats=fetchInto('categories',db.collection('categories'),{replace:true,cacheKey:'categories',ttl:1800000});
+      // Stock sí necesita tiempo real para evitar vender con una pantalla desactualizada.
+      const products=listenScoped('productsLive','products',db.collection('products'),{replace:true});
+      // Una caja abierta no depende de la fecha: puede continuar durante la madrugada o varios días.
+      const cashQuery=db.collection('cashSessions').where('usuarioId','==',u.id).where('estado','==','Abierta');
+      const cash=listenScoped('openCash','cashSessions',cashQuery,{predicate:x=>x.usuarioId===u.id&&x.estado==='Abierta'});
+      await Promise.all([cats,products,cash]);
+    }
+    await bindDailyListeners(!refs.todaySales);
   }
   async function loadUsers(){ return fetchInto('users',db.collection('users'),{replace:true,cacheKey:'users',ttl:900000}); }
   async function loadSalesHistory(){
@@ -129,6 +142,12 @@ const Store = (() => {
     for(const date of dates)await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000});
     return{ok:true};
   }
+  async function loadSalesForCash(cashId,{force=false}={}){
+    cashId=String(cashId||'').trim();
+    const u=state.currentUser;if(!u||!cashId)return{ok:false,error:'Caja inválida'};
+    let q=db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',cashId);
+    return fetchInto('sales',q,{cacheKey:`cashSales:${cashId}`,ttl:force?0:120000});
+  }
   async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(30)).orderBy('fecha','desc'),{cacheKey:'expensesHistory',ttl:300000}); }
   async function loadExpensesForRange(desde,hasta){
     if(!validDateRange(desde,hasta))return{ok:false,error:'Rango de fechas inválido'};
@@ -148,12 +167,17 @@ const Store = (() => {
   }
   async function preparePage(page){
     if(!state.currentUser)return;
+    await refreshDailyContext();
     if(['empleados','movimientos','gastos'].includes(page))await loadUsers();
     if(page==='empleados')return;
     if(page==='movimientos')await loadMovements();
     if(page==='gastos')await loadExpensesHistory();
     if(page==='historial')await Promise.all([loadSalesHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
-    if(page==='caja')await loadCashHistory();
+    if(page==='caja'){
+      await loadCashHistory();
+      const open=state.cashSessions.find(c=>c.usuarioId===state.currentUser.id&&c.estado==='Abierta');
+      if(open)await loadSalesForCash(open.id);
+    }
     if(page==='reportes')await Promise.all([loadSalesHistory(),loadExpensesHistory()]);
   }
   let profilePromise=null, profileUid=null;
@@ -164,7 +188,7 @@ const Store = (() => {
     profilePromise=(async()=>{const d=await db.collection('users').doc(uid).get();trackUsage('reads',1,d.exists?[{id:d.id,...d.data()}]:[]);return d.exists?normalizeUser({id:uid,...d.data()}):null;})();
     try{return await profilePromise;}finally{profilePromise=null;}
   }
-  function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; validatedCashId=null;}
+  function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; liveBusinessDate=null; validatedCashId=null;}
   async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const profile=await loadProfile(u.uid); if(!profile){await fbAuth.signOut();resolve();return;} state.currentUser=profile; if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
   async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const profile=await loadProfile(c.user.uid);if(!profile||!isActive(profile)){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=profile;await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
   async function logout(){stop();state.cart=[];state.currentUser=null;await fbAuth.signOut()}
@@ -417,9 +441,9 @@ const Store = (() => {
     for(const i of state.cart){
       if(!i?.productoId||!Number.isInteger(Number(i.cantidad))||Number(i.cantidad)<=0)return{ok:false,error:'El carrito contiene una cantidad inválida'};
     }
-    const hoy=today();
-    const caja=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===hoy);
-    if(!caja)return{ok:false,error:'Debes abrir la caja de hoy antes de registrar una venta'};
+    await refreshDailyContext();
+    const caja=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta');
+    if(!caja)return{ok:false,error:'Debes abrir una caja antes de registrar una venta'};
     const lock=await ensureCashLock(caja);if(!lock.ok)return lock;
     const saleRef=db.collection('sales').doc();
     let savedPayments=[],savedMethod='';
@@ -532,6 +556,10 @@ const Store = (() => {
         }
         tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});
       });
+      // Reflejar de inmediato la anulación en memoria, incluso si la venta pertenece
+      // a un día anterior y ya no está cubierta por el listener de "hoy".
+      const localSale=state.sales.find(x=>x.id===id);
+      if(localSale){const t=limaParts();Object.assign(localSale,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});}
       await safeAudit('ANULAR_VENTA',`${id}: ${motivo}`);
       return{ok:true};
     }catch(e){
@@ -633,13 +661,11 @@ const Store = (() => {
     const u=state.currentUser,c=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta');
     if(!c)return{ok:false,error:'No hay caja abierta'};
     try{
-      // La venta del día ya está sincronizada por el listener; reutilizarla evita releer toda la caja al cerrar.
-      let ventas=state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===c.id&&s.estado!=='Anulada');
-      if(!refs.todaySales || c.fecha!==today()){
-        const qs=await db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',c.id).get();
-        ventas=qs.docs.map(d=>({id:d.id,...d.data()})).filter(s=>s.estado!=='Anulada');
-        trackUsage('reads',qs.size,ventas);
-      }
+      // Al cerrar, se toma TODA la sesión por cajaId. Así una caja puede atravesar medianoche
+      // sin perder ventas del día de apertura ni del día siguiente.
+      const loaded=await loadSalesForCash(c.id,{force:true});
+      if(!loaded.ok)throw Error(loaded.error||'No se pudieron cargar las ventas de esta caja');
+      const ventas=state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===c.id&&s.estado!=='Anulada');
       const pay=paymentTotals(ventas);
       const efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta;
       const totalVentasDia=+(efectivo+yape+plin+tarjeta).toFixed(2),esperado=+(Number(c.montoInicial||0)+efectivo).toFixed(2),dif=+(real-esperado).toFixed(2),t=limaParts();
@@ -652,7 +678,7 @@ const Store = (() => {
         if(lockSnap.exists && lockSnap.data().cajaId===c.id)tx.delete(lockRef);
       });trackUsage('reads',2);trackUsage('writes',1);trackUsage('deletes',1);
       const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2)});
-      validatedCashId=null;await safeAudit('CERRAR_CAJA',`Ventas día S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
+      validatedCashId=null;await safeAudit('CERRAR_CAJA',`Ventas de la sesión S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
       return{ok:true,diferencia:dif,totalVentasDia};
     }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
   }
@@ -738,5 +764,5 @@ const Store = (() => {
     }
   }
 
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,loadSalesForDate,loadSalesForRange,loadExpensesForRange,loadMovementsForRange,daysAgo,getSalePayments,paymentTotals,salePaymentLabel,updateExpense:(...a)=>guarded('updateExpense:'+a[0],()=>updateExpense(...a)),deleteExpense:(...a)=>guarded('deleteExpense:'+a[0],()=>deleteExpense(...a)),resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,refreshDailyContext,loadSalesForDate,loadSalesForRange,loadSalesForCash,loadExpensesForRange,loadMovementsForRange,daysAgo,getSalePayments,paymentTotals,salePaymentLabel,updateExpense:(...a)=>guarded('updateExpense:'+a[0],()=>updateExpense(...a)),deleteExpense:(...a)=>guarded('deleteExpense:'+a[0],()=>deleteExpense(...a)),resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
 })();

@@ -36,7 +36,7 @@ const Pages = {
       <div class="page-header ux-page-head">
         <div><h1 class="page-title">📊 Dashboard</h1><p class="ux-page-sub">Resumen de ventas y medios de pago de hoy</p></div>
       </div>
-      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'&&x.fecha===Store.today()); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Abierta ${Utils.formatTime(c.hora)} · Monto inicial ${Utils.formatMoney(c.montoInicial||0)}`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Desde ${Utils.formatDate(c.fecha)} ${Utils.formatTime(c.hora)} · seguirá abierta hasta que la cierres`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
       <div class="ux-quick-actions">
         <button class="ux-action primary" onclick="Router.go('ventas')"><span>🛒</span><b>Nueva venta</b><small>Cobrar productos</small></button>
         <button class="ux-action" onclick="Router.go('productos')"><span>📦</span><b>Inventario</b><small>Productos y stock</small></button>
@@ -127,7 +127,7 @@ const Pages = {
 
     return `
       <div class="page-header ux-page-head"><div><h1 class="page-title">🏠 Hola, ${Utils.escapeHtml(user.nombres)}</h1><p class="ux-page-sub">Tu actividad de hoy</p></div></div>
-      ${(() => { const c=Store.state.cashSessions.find(x=>x.usuarioId===user.id&&x.estado==='Abierta'&&x.fecha===today); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?'Ya puedes registrar ventas':'Debes abrir caja antes de vender'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      ${(() => { const c=Store.state.cashSessions.find(x=>x.usuarioId===user.id&&x.estado==='Abierta'); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Desde ${Utils.formatDate(c.fecha)} ${Utils.formatTime(c.hora)} · no se cierra al cambiar de día`:'Debes abrir caja antes de vender'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
       <div class="stat-cards">
         <div class="stat-card">
           <div class="stat-label">💰 Mis ventas de hoy</div>
@@ -917,12 +917,13 @@ const Pages = {
     const todayTotal = Store.expensesToday().reduce((s,e)=>s+Number(e.monto||0),0);
     return `
       <div class="page-header">
-        <div><h1 class="page-title">💸 Gastos</h1><p class="ux-page-sub">CRUD de gastos manuales y consulta de compras automáticas de inventario.</p></div>
+        <div><h1 class="page-title">💸 Gastos</h1><p class="ux-page-sub">Registra, edita y consulta tus gastos. Las compras de inventario se registran automáticamente para mantener el control.</p></div>
         <button class="btn btn-primary" onclick="Pages.openGastoForm()">➕ Nuevo gasto</button>
       </div>
-      <div class="stat-cards" style="margin-bottom:1.25rem">
-        <div class="stat-card amber"><div class="stat-label">💸 Total según filtros</div><div class="stat-value amber" id="gasto-total">${Utils.formatMoney(periodTotal)}</div><div class="stat-sub" id="gasto-count">${expenses.length} registro(s)</div></div>
-        <div class="stat-card"><div class="stat-label">📅 Gastos de hoy</div><div class="stat-value">${Utils.formatMoney(todayTotal)}</div></div>
+      <div class="stat-cards ux-filter-summary" style="margin-bottom:1.25rem">
+        <div class="stat-card amber ux-live-total"><div class="stat-label">💸 Total de gastos en este filtro</div><div class="stat-value amber" id="gasto-total">${Utils.formatMoney(periodTotal)}</div><div class="stat-sub" id="gasto-range-label">${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}</div></div>
+        <div class="stat-card"><div class="stat-label">🧾 Resultados</div><div class="stat-value" id="gasto-count">${expenses.length}</div><div class="stat-sub">registro(s) que cumplen los filtros</div></div>
+        <div class="stat-card"><div class="stat-label">📅 Gastos de hoy</div><div class="stat-value">${Utils.formatMoney(todayTotal)}</div><div class="stat-sub">Referencia del día actual</div></div>
       </div>
       <div class="toolbar ux-filter-grid">
         <input type="search" class="search-input" id="gasto-search" placeholder="🔎 Buscar concepto..." oninput="Pages.filterGastos()" />
@@ -933,6 +934,7 @@ const Pages = {
         <label class="ux-date-filter">Desde<input type="date" id="gasto-from" class="filter-select" value="${desde}" onchange="Pages.filterGastos(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="gasto-to" class="filter-select" value="${hasta}" onchange="Pages.filterGastos(true)" /></label>
       </div>
+      <div class="ux-filter-actions"><span>⚡ El total se actualiza automáticamente al cambiar cualquier filtro.</span><button class="btn btn-sm btn-secondary" onclick="Pages.resetGastoFilters()">↺ Limpiar filtros</button></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Fecha</th><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th><th>Origen</th><th>Usuario</th><th>Acciones</th></tr></thead>
@@ -953,18 +955,25 @@ const Pages = {
         <td data-label="Monto" style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
         <td data-label="Origen">${manual?'<span class="badge badge-accent">✍️ Manual</span>':'<span class="badge badge-success">📦 Inventario</span>'}</td>
         <td data-label="Usuario">${Utils.escapeHtml(u ? u.nombres : (e.usuarioNombre||'—'))}</td>
-        <td data-label="Acciones" class="table-actions">${manual?`<button class="btn btn-sm btn-secondary" onclick="Pages.openGastoForm('${e.id}')">✏️ Editar</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteGasto('${e.id}')">🗑️ Eliminar</button>`:'<span class="text-muted" title="Se conserva para mantener la trazabilidad del inventario">🔒 Automático</span>'}</td>
+        <td data-label="Acciones" class="table-actions">${manual?`<button class="btn btn-sm btn-secondary" onclick="Pages.openGastoForm('${e.id}')">✏️ Editar</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteGasto('${e.id}')">🗑️ Eliminar</button>`:'<span class="ux-auto-locked" title="Este registro viene del inventario y se conserva para mantener el historial">🔒 Automático</span>'}</td>
       </tr>`;
     }).join('');
   },
   async filterGastos(loadRange=false) {
-    const q=(document.getElementById('gasto-search')?.value||'').trim().toLowerCase();
-    const cat=document.getElementById('gasto-cat-filter')?.value||'';
-    const origin=document.getElementById('gasto-origin-filter')?.value||'';
+    const seq=loadRange?((this._gastoFilterSeq||0)+1):(this._gastoFilterSeq||0);if(loadRange)this._gastoFilterSeq=seq;
     const desde=document.getElementById('gasto-from')?.value||Store.daysAgo(30);
     const hasta=document.getElementById('gasto-to')?.value||Store.today();
     if(desde>hasta)return Toast.show('La fecha Desde no puede ser posterior a Hasta','error');
-    if(loadRange && Store.loadExpensesForRange) await Store.loadExpensesForRange(desde,hasta);
+    const totalEl=document.getElementById('gasto-total'),rangeEl=document.getElementById('gasto-range-label');
+    if(loadRange&&totalEl){totalEl.classList.add('ux-value-loading');totalEl.textContent='Actualizando…';}
+    if(loadRange && Store.loadExpensesForRange){
+      const loaded=await Store.loadExpensesForRange(desde,hasta);
+      if(seq!==this._gastoFilterSeq)return;
+      if(!loaded?.ok){if(totalEl)totalEl.classList.remove('ux-value-loading');return Toast.show(loaded?.error||'No se pudieron cargar los gastos del rango','error');}
+    }
+    const q=(document.getElementById('gasto-search')?.value||'').trim().toLowerCase();
+    const cat=document.getElementById('gasto-cat-filter')?.value||'';
+    const origin=document.getElementById('gasto-origin-filter')?.value||'';
     const list=[...Store.state.expenses].filter(e=>{
       const auto=String(e.origen||'Manual')!=='Manual';
       return String(e.fecha||'')>=desde&&String(e.fecha||'')<=hasta&&(!q||String(e.concepto||'').toLowerCase().includes(q))&&(!cat||e.categoria===cat)&&(!origin||(origin==='Manual'?!auto:auto));
@@ -972,9 +981,15 @@ const Pages = {
     const tbody=document.getElementById('gasto-tbody');
     if(tbody){tbody.innerHTML=this._gastoRows(list);App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);this._paginateRows('gastos','gasto-tbody',1);}
     const total=list.reduce((s,e)=>s+Number(e.monto||0),0);
-    const totalEl=document.getElementById('gasto-total'),countEl=document.getElementById('gasto-count');
-    if(totalEl)totalEl.textContent=Utils.formatMoney(total);
-    if(countEl)countEl.textContent=`${list.length} registro(s)`;
+    const countEl=document.getElementById('gasto-count');
+    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);}
+    if(rangeEl)rangeEl.textContent=desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`;
+    if(countEl)countEl.textContent=String(list.length);
+  },
+  resetGastoFilters() {
+    const q=document.getElementById('gasto-search'),cat=document.getElementById('gasto-cat-filter'),origin=document.getElementById('gasto-origin-filter'),from=document.getElementById('gasto-from'),to=document.getElementById('gasto-to');
+    if(q)q.value='';if(cat)cat.value='';if(origin)origin.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
+    this.filterGastos(true);
   },
   openGastoForm(id='') {
     const e=id?Store.state.expenses.find(x=>x.id===id):null;
@@ -1122,10 +1137,10 @@ const Pages = {
   openPago() {
     const total = Store.getCartTotal();
     if (Store.state.cart.length === 0) return;
-    const u = Auth.currentUser(), hoy = Store.today();
-    const cajaAbierta = Store.state.cashSessions.find(c => c.usuarioId === u.id && c.estado === 'Abierta' && c.fecha === hoy);
+    const u = Auth.currentUser();
+    const cajaAbierta = Store.state.cashSessions.find(c => c.usuarioId === u.id && c.estado === 'Abierta');
     if (!cajaAbierta) {
-      Modal.open(`<div class="modal-header"><h2>⚠️ Caja cerrada</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div><div class="modal-body"><p>Antes de registrar una venta debes <strong>abrir la caja del día</strong>.</p></div><div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Ir a Caja</button></div>`);
+      Modal.open(`<div class="modal-header"><h2>⚠️ Caja cerrada</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div><div class="modal-body"><p>Antes de registrar una venta debes <strong>abrir una caja</strong>. Una vez abierta, seguirá activa aunque pase medianoche hasta que la cierres manualmente.</p></div><div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Ir a Caja</button></div>`);
       return;
     }
     const half=+(total/2).toFixed(2), rest=+(total-half).toFixed(2);
@@ -1208,16 +1223,20 @@ const Pages = {
     let sales=[...Store.state.sales].filter(s=>String(s.fecha||'')>=desde&&String(s.fecha||'')<=hasta);
     if(Auth.isEmployee())sales=sales.filter(s=>s.empleadoId===user.id);
     sales.sort((a,b)=>(b.fecha+b.hora).localeCompare(a.fecha+a.hora));
-    const valid=sales.filter(x=>x.estado!=='Anulada'),total=valid.reduce((sum,x)=>sum+Number(x.total||0),0);
+    const valid=sales.filter(x=>x.estado!=='Anulada'),annulled=sales.filter(x=>x.estado==='Anulada'),total=valid.reduce((sum,x)=>sum+Number(x.total||0),0);
     return `
-      <div class="page-header"><div><h1 class="page-title">🧾 ${Auth.isAdmin()?'Historial de ventas':'Mis ventas'}</h1><p class="ux-page-sub">El total cambia automáticamente según el rango y los filtros seleccionados.</p></div></div>
-      <div class="stat-cards" style="margin-bottom:1.25rem"><div class="stat-card"><div class="stat-label">💰 Total de ventas filtradas</div><div class="stat-value amber" id="hist-total">${Utils.formatMoney(total)}</div><div class="stat-sub" id="hist-count">${valid.length} venta(s) válida(s)</div></div></div>
+      <div class="page-header"><div><h1 class="page-title">🧾 ${Auth.isAdmin()?'Historial de ventas':'Mis ventas'}</h1><p class="ux-page-sub">Filtra por fecha, método o búsqueda. El monto se recalcula automáticamente con los resultados del filtro.</p></div></div>
+      <div class="stat-cards ux-filter-summary" style="margin-bottom:1.25rem">
+        <div class="stat-card ux-live-total"><div class="stat-label" id="hist-total-label">💰 Total vendido en este filtro</div><div class="stat-value amber" id="hist-total">${Utils.formatMoney(total)}</div><div class="stat-sub" id="hist-range-label">${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}</div></div>
+        <div class="stat-card"><div class="stat-label">🧾 Resultados</div><div class="stat-value" id="hist-count">${valid.length}</div><div class="stat-sub"><span id="hist-valid-label">${valid.length} completada(s)</span> · <span id="hist-annulled-label">${annulled.length} anulada(s)</span></div></div>
+      </div>
       <div class="toolbar ux-filter-grid">
         <input type="search" class="search-input" id="hist-search" placeholder="🔎 Buscar..." oninput="Pages.filterHistorial()" />
         <select class="filter-select" id="hist-method" onchange="Pages.filterHistorial()"><option value="">Todos los métodos</option><option value="Efectivo">Efectivo</option><option value="Yape">Yape</option><option value="Plin">Plin</option><option value="Tarjeta">Tarjeta</option></select>
         <label class="ux-date-filter">Desde<input type="date" id="hist-from" class="filter-select" value="${desde}" onchange="Pages.filterHistorial(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="hist-to" class="filter-select" value="${hasta}" onchange="Pages.filterHistorial(true)" /></label>
       </div>
+      <div class="ux-filter-actions"><span>⚡ El monto superior siempre corresponde a lo que estás viendo con estos filtros.</span><button class="btn btn-sm btn-secondary" onclick="Pages.resetHistFilters()">↺ Limpiar filtros</button></div>
       <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Empleado</th><th>Productos</th><th>Total</th><th>Método</th><th>Estado</th><th></th></tr></thead><tbody id="hist-tbody">${this._histRows(sales)}</tbody></table></div>
     `;
   },
@@ -1230,10 +1249,17 @@ const Pages = {
     }).join('');
   },
   async filterHistorial(loadRange=false) {
-    const method=(document.getElementById('hist-method')?.value||'').trim();
+    const seq=loadRange?((this._histFilterSeq||0)+1):(this._histFilterSeq||0);if(loadRange)this._histFilterSeq=seq;
     const desde=document.getElementById('hist-from')?.value||Store.daysAgo(30),hasta=document.getElementById('hist-to')?.value||Store.today();
     if(desde>hasta)return Toast.show('La fecha Desde no puede ser posterior a Hasta','error');
-    if(loadRange&&Store.loadSalesForRange)await Store.loadSalesForRange(desde,hasta);
+    const totalEl=document.getElementById('hist-total'),rangeEl=document.getElementById('hist-range-label');
+    if(loadRange&&totalEl){totalEl.classList.add('ux-value-loading');totalEl.textContent='Actualizando…';}
+    if(loadRange&&Store.loadSalesForRange){
+      const loaded=await Store.loadSalesForRange(desde,hasta);
+      if(seq!==this._histFilterSeq)return;
+      if(!loaded?.ok){if(totalEl)totalEl.classList.remove('ux-value-loading');return Toast.show(loaded?.error||'No se pudieron cargar las ventas del rango','error');}
+    }
+    const method=(document.getElementById('hist-method')?.value||'').trim();
     const q=(document.getElementById('hist-search')?.value||'').trim().toLowerCase(),user=Auth.currentUser();
     let sales=[...Store.state.sales];if(Auth.isEmployee())sales=sales.filter(s=>s.empleadoId===user.id);
     sales=sales.filter(s=>{
@@ -1243,8 +1269,24 @@ const Pages = {
       return String(s.fecha||'')>=desde&&String(s.fecha||'')<=hasta&&(!method||methods.includes(method))&&(!q||haystack.includes(q));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
     const tbody=document.getElementById('hist-tbody');if(tbody){tbody.innerHTML=this._histRows(sales);App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);this._paginateRows('historial','hist-tbody',1);}
-    const valid=sales.filter(s=>s.estado!=='Anulada'),total=valid.reduce((sum,s)=>sum+Number(s.total||0),0);
-    const totalEl=document.getElementById('hist-total'),countEl=document.getElementById('hist-count');if(totalEl)totalEl.textContent=Utils.formatMoney(total);if(countEl)countEl.textContent=`${valid.length} venta(s) válida(s)`;
+    const valid=sales.filter(s=>s.estado!=='Anulada'),annulled=sales.filter(s=>s.estado==='Anulada');
+    const total=valid.reduce((sum,s)=>{
+      if(!method)return sum+Number(s.total||0);
+      const methodAmount=Store.getSalePayments(s).filter(p=>p.metodo===method).reduce((a,p)=>a+Number(p.monto||0),0);
+      return sum+methodAmount;
+    },0);
+    const countEl=document.getElementById('hist-count'),validEl=document.getElementById('hist-valid-label'),annulledEl=document.getElementById('hist-annulled-label'),labelEl=document.getElementById('hist-total-label');
+    if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);}
+    if(labelEl)labelEl.textContent=method?`💰 Total cobrado en ${method}`:'💰 Total vendido en este filtro';
+    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${method?' · En pagos separados se suma solo esa forma de pago':''}`;
+    if(countEl)countEl.textContent=String(valid.length);
+    if(validEl)validEl.textContent=`${valid.length} completada(s)`;
+    if(annulledEl)annulledEl.textContent=`${annulled.length} anulada(s)`;
+  },
+  resetHistFilters() {
+    const q=document.getElementById('hist-search'),method=document.getElementById('hist-method'),from=document.getElementById('hist-from'),to=document.getElementById('hist-to');
+    if(q)q.value='';if(method)method.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
+    this.filterHistorial(true);
   },
   showSaleDetail(id) {
     const s=Store.state.sales.find(x=>x.id===id);if(!s)return;
@@ -1303,12 +1345,12 @@ const Pages = {
   },
   caja() {
     const u=Auth.currentUser(),abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
-    const hoy=Store.today(),fechaCaja=abierta?.fecha||hoy;
-    const ventasHoy=Store.state.sales.filter(s=>s.empleadoId===u.id&&s.fecha===fechaCaja&&s.estado!=='Anulada'&&(!abierta||!s.cajaId||s.cajaId===abierta.id));
-    const pay=Store.paymentTotals(ventasHoy),efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta,totalDia=+(efectivo+yape+plin+tarjeta).toFixed(2);
+    const hoy=Store.today();
+    const ventasCaja=abierta?Store.state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===abierta.id&&s.estado!=='Anulada'):[];
+    const pay=Store.paymentTotals(ventasCaja),efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta,totalCaja=+(efectivo+yape+plin+tarjeta).toFixed(2);
     const montoInicial=Number(abierta?.montoInicial||0),esperado=+(montoInicial+efectivo).toFixed(2);
     const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
-    const cajaAnterior=abierta&&abierta.fecha!==hoy;
+    const cruzoMedianoche=!!abierta&&abierta.fecha!==hoy;
     const metricasCaja=c=>{
       const sales=Store.state.sales.filter(s=>s.cajaId===c.id&&s.estado!=='Anulada'),calc=Store.paymentTotals(sales);
       const fallbackTotal=calc.Efectivo+calc.Yape+calc.Plin+calc.Tarjeta;
@@ -1316,27 +1358,28 @@ const Pages = {
     };
     const historyRows=hist.map(c=>{
       const m=metricasCaja(c),isOpen=c.estado==='Abierta',diff=c.diferencia==null?null:Number(c.diferencia||0);
-      const status=isOpen?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>';
+      const status=isOpen?'<span class="badge badge-success">● Abierta</span>':`<span class="badge badge-neutral">Cerrada</span>${c.fechaCierre?`<small class="ux-cash-closed-at">${Utils.formatDate(c.fechaCierre)} ${Utils.formatTime(c.horaCierre||'')}</small>`:''}`;
       const diffHtml=isOpen?'<span class="badge badge-warning">Pendiente</span>':Math.abs(diff||0)<0.005?'<span class="badge badge-success">S/ 0.00</span>':`<span class="badge ${diff<0?'badge-danger':'badge-warning'}">${diff>0?'+':''}${Utils.formatMoney(diff)}</span>`;
-      return `<tr class="${isOpen?'ux-cash-row-open':''}"><td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${Utils.formatTime(c.hora)}</small></div></td><td data-label="Usuario"><strong>${Utils.escapeHtml(c.usuarioNombre||'—')}</strong></td><td data-label="Monto inicial"><strong>${Utils.formatMoney(c.montoInicial||0)}</strong></td><td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(m.total)}</strong></td><td data-label="Efectivo ventas">${Utils.formatMoney(m.efectivo)}</td><td data-label="Yape / Plin"><div class="ux-split-payment"><span>Yape <strong>${Utils.formatMoney(m.yape)}</strong></span><span>Plin <strong>${Utils.formatMoney(m.plin)}</strong></span></div></td><td data-label="Tarjeta">${Utils.formatMoney(m.tarjeta)}</td><td data-label="Estado">${status}</td><td data-label="Diferencia">${diffHtml}</td></tr>`;
+      return `<tr class="${isOpen?'ux-cash-row-open':''}"><td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${Utils.formatTime(c.hora)}</small></div></td><td data-label="Usuario"><strong>${Utils.escapeHtml(c.usuarioNombre||'—')}</strong></td><td data-label="Monto inicial"><strong>${Utils.formatMoney(c.montoInicial||0)}</strong></td><td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(m.total)}</strong></td><td data-label="Efectivo ventas">${Utils.formatMoney(m.efectivo)}</td><td data-label="Yape / Plin"><div class="ux-split-payment"><span>Yape <strong>${Utils.formatMoney(m.yape)}</strong></span><span>Plin <strong>${Utils.formatMoney(m.plin)}</strong></span></div></td><td data-label="Tarjeta">${Utils.formatMoney(m.tarjeta)}</td><td data-label="Estado"><div class="ux-cash-status-cell">${status}</div></td><td data-label="Diferencia">${diffHtml}</td></tr>`;
     }).join('')||'<tr><td colspan="9">Sin registros de caja</td></tr>';
-    return `<div class="page-header ux-page-head"><div><h1 class="page-title">💰 Caja</h1><p class="ux-page-sub">El monto inicial queda registrado por separado y nunca se suma a las ventas.</p></div></div>
-      ${cajaAnterior?`<div class="alert alert-warning"><strong>⚠️ Caja pendiente del ${Utils.formatDate(abierta.fecha)}</strong><br>Ciérrala antes de registrar ventas de hoy.</div>`:''}
-      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Apertura ${Utils.formatTime(abierta.hora)} · Monto inicial ${Utils.formatMoney(montoInicial)}`:'Abre una caja para comenzar a vender'}</p></div></div></div>
+    return `<div class="page-header ux-page-head"><div><h1 class="page-title">💰 Caja</h1><p class="ux-page-sub">La caja permanece abierta hasta que tú la cierres. Cambiar de día o pasar medianoche no la cierra.</p></div></div>
+      ${cruzoMedianoche?`<div class="alert ux-cash-overnight"><strong>🌙 La caja sigue abierta desde ${Utils.formatDate(abierta.fecha)} ${Utils.formatTime(abierta.hora)}</strong><br>Puedes continuar vendiendo normalmente. Las ventas de hoy seguirán perteneciendo a esta misma caja hasta que pulses <strong>Cerrar caja</strong>.</div>`:''}
+      <div class="ux-cash-how"><span>1️⃣ Abre al iniciar el turno</span><span>2️⃣ Vende durante toda la jornada, incluso después de medianoche</span><span>3️⃣ Cierra cuando termine realmente el turno</span></div>
+      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Abierta desde ${Utils.formatDate(abierta.fecha)} ${Utils.formatTime(abierta.hora)} · Monto inicial ${Utils.formatMoney(montoInicial)}`:'Abre una caja al iniciar tu turno'}</p></div></div></div>
       <div class="stat-cards ux-payment-summary">
-        <div class="stat-card"><div class="stat-label">💰 Total vendido</div><div class="stat-value amber">${Utils.formatMoney(totalDia)}</div><div class="stat-sub">${ventasHoy.length} venta(s) · no incluye apertura</div></div>
-        <div class="stat-card"><div class="stat-label">🏁 Monto inicial</div><div class="stat-value">${Utils.formatMoney(montoInicial)}</div><div class="stat-sub">Registro de apertura</div></div>
-        <div class="stat-card"><div class="stat-label">💵 Efectivo de ventas</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Efectivo esperado total: ${Utils.formatMoney(esperado)}</div></div>
-        <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">${Utils.formatMoney(yape)} / ${Utils.formatMoney(plin)}</div></div>
-        <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos electrónicos</div></div>
+        <div class="stat-card"><div class="stat-label">💰 Total vendido en esta caja</div><div class="stat-value amber">${Utils.formatMoney(totalCaja)}</div><div class="stat-sub">${ventasCaja.length} venta(s) desde la apertura · no incluye monto inicial</div></div>
+        <div class="stat-card"><div class="stat-label">🏁 Monto inicial</div><div class="stat-value">${Utils.formatMoney(montoInicial)}</div><div class="stat-sub">Solo registro de apertura</div></div>
+        <div class="stat-card"><div class="stat-label">💵 Efectivo de ventas</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Efectivo esperado en caja: ${Utils.formatMoney(esperado)}</div></div>
+        <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(yape)} · Plin ${Utils.formatMoney(plin)}</div></div>
+        <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos con tarjeta</div></div>
       </div>
       <div class="ux-cash-layout">
-        <div class="card ux-cash-action"><h3>${abierta?'🔒 Cerrar caja':'🔓 Abrir caja'}</h3>${abierta?`<div class="ux-money-row"><span>Monto inicial</span><strong>${Utils.formatMoney(montoInicial)}</strong></div><div class="ux-money-row"><span>Ventas en efectivo</span><strong>${Utils.formatMoney(efectivo)}</strong></div><div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">El cierre compara: monto inicial + ventas en efectivo vs. efectivo real contado.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Se guardará como apertura, separado de las ventas.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar</button>`}</div>
-        <div class="card ux-cash-history-card"><div class="ux-section-head ux-cash-history-head"><div><h3>📚 Historial de caja</h3><p>Apertura, ventas, medios de pago y diferencias</p></div><span class="ux-history-count">${hist.length} sesión${hist.length===1?'':'es'}</span></div><div class="table-wrap ux-cash-history"><table><thead><tr><th>Apertura</th><th>Usuario</th><th>Monto inicial</th><th>Ventas</th><th>Efectivo ventas</th><th>Yape / Plin</th><th>Tarjeta</th><th>Estado</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div></div>
+        <div class="card ux-cash-action"><h3>${abierta?'🔒 Cerrar caja al terminar el turno':'🔓 Abrir caja'}</h3>${abierta?`<p class="ux-help ux-help-prominent">No necesitas cerrar a medianoche. Hazlo solo cuando termine la atención o cambie el responsable de caja.</p><div class="ux-money-row"><span>Monto inicial</span><strong>${Utils.formatMoney(montoInicial)}</strong></div><div class="ux-money-row"><span>Ventas en efectivo</span><strong>${Utils.formatMoney(efectivo)}</strong></div><div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado al cierre</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Compara el monto inicial + todo el efectivo vendido durante esta sesión, aunque haya pasado al día siguiente.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja y finalizar turno</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Este monto queda separado de las ventas. La caja seguirá abierta hasta que decidas cerrarla.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar turno</button>`}</div>
+        <div class="card ux-cash-history-card"><div class="ux-section-head ux-cash-history-head"><div><h3>📚 Historial de caja</h3><p>Cada fila representa una sesión completa: desde apertura hasta cierre</p></div><span class="ux-history-count">${hist.length} sesión${hist.length===1?'':'es'}</span></div><div class="table-wrap ux-cash-history"><table><thead><tr><th>Apertura</th><th>Usuario</th><th>Monto inicial</th><th>Ventas</th><th>Efectivo ventas</th><th>Yape / Plin</th><th>Tarjeta</th><th>Estado / cierre</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div></div>
       </div>`;
   },
-  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta':r.error,r.ok?'success':'error');if(r.ok){SetupGuide.mark('cashOpened');Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
-  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Esta acción finalizará la sesión de caja.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Confirmar cierre de caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
+  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. Permanecerá abierta hasta que la cierres manualmente. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta. Puedes vender aunque pase medianoche.':r.error,r.ok?'success':'error');if(r.ok){SetupGuide.mark('cashOpened');Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
+  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Se incluirán todas las ventas realizadas desde la apertura, incluso las del día siguiente.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Finalizar turno y cerrar caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
   reportes(){
     if(!Auth.requireAdmin())return '';
     const desde=Store.daysAgo(30),sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),exp=Store.state.expenses.filter(e=>e.fecha>=desde),gastos=exp.reduce((a,b)=>a+Number(b.monto||0),0),util=ventas-costo-gastos,pay=Store.paymentTotals(sales);

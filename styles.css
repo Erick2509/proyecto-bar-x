@@ -1361,3 +1361,21 @@ select option { background:#1c1a16; color:#f7f3ed; }
   .ux-mini-metrics{align-items:stretch}
   .ux-mini-metrics span{width:100%;justify-content:space-between}
 }
+
+/* ===== v33: caja continua + totales de filtros más claros ===== */
+.ux-filter-summary{align-items:stretch}
+.ux-filter-summary .stat-card{min-height:128px}
+.ux-live-total{position:relative;overflow:hidden}
+.ux-live-total::after{content:'AUTO';position:absolute;top:.75rem;right:.8rem;font-size:.62rem;font-weight:800;letter-spacing:.08em;color:var(--accent);border:1px solid rgba(32,199,142,.28);background:rgba(32,199,142,.08);border-radius:999px;padding:.18rem .4rem}
+.ux-value-loading{font-size:1rem!important;color:var(--text-secondary)!important;animation:uxPulse 1s ease-in-out infinite alternate}
+@keyframes uxPulse{from{opacity:.55}to{opacity:1}}
+.ux-cash-how{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.65rem;margin:0 0 1rem}
+.ux-cash-how span{display:flex;align-items:center;gap:.55rem;padding:.72rem .8rem;border:1px solid var(--border);background:var(--surface);border-radius:12px;color:var(--text-secondary);font-size:.8rem;line-height:1.35}
+.ux-cash-overnight{border:1px solid rgba(59,130,246,.28);background:rgba(59,130,246,.08);color:#dbeafe;line-height:1.5}
+.ux-help-prominent{padding:.7rem .8rem;border-radius:10px;background:rgba(32,199,142,.08);border:1px solid rgba(32,199,142,.2);color:#c9f7e7}
+.ux-cash-status-cell{display:flex;flex-direction:column;gap:.3rem;align-items:flex-start}
+.ux-cash-closed-at{color:var(--text-muted);font-size:.7rem;white-space:nowrap}
+@media(max-width:780px){.ux-cash-how{grid-template-columns:1fr}.ux-filter-summary .stat-card{min-height:auto}}
+.ux-filter-actions{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin:-.25rem 0 1rem;color:var(--text-muted);font-size:.78rem}
+@media(max-width:560px){.ux-filter-actions{align-items:stretch;flex-direction:column}.ux-filter-actions .btn{width:100%}}
+.ux-auto-locked{display:inline-flex;align-items:center;gap:.3rem;color:#b9b0a3;font-size:.78rem;font-weight:600;white-space:nowrap}

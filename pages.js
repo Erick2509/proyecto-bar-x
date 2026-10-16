@@ -553,7 +553,7 @@ const Pages = {
       { id:'numeros', nombre:'🔢 Números', keywords:'pack unidad unidades numero cantidad', icons:'0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟 #️⃣ *️⃣'.split(' ') },
       { id:'simbolos', nombre:'🔴 Símbolos', keywords:'color circulo cuadrado corazon flecha check alerta', icons:'🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟤 🟥 🟧 🟨 🟩 🟦 🟪 ⬛ ⬜ ❤️ 🧡 💛 💚 💙 💜 ✅ ❌ ⚠️ ❗ ❓ ➕ ➖ 🔥 ⭐'.split(' ') },
       { id:'caras', nombre:'😀 Caras', keywords:'cara feliz emoji sonrisa amor fiesta', icons:'😀 😃 😄 😁 😆 😅 😂 🙂 😊 😋 😎 😍 🥰 😘 🤩 🥳 😜 🤤 😇 🤠 🤑 🤗 🤝 👍 👌 🙌 👏 💪'.split(' ') },
-      { id:'otros', nombre:'💎 Otros', keywords:'otro favorito premium rapido importante disponible', icons:'📌 📍 🏆 🥇 👑 💎 🚀 ⚡ ☀️ 🌙 🌈 🎀 🪄 🔔 🔥 ⭐ ✅ 💯 🆕 🔑 🧾 🧮 💳 💰'.split(' ') }
+      { id:'otros', nombre:'💎 Otros', keywords:'otro favorito premium rapido importante disponible cigarro', icons:'📌 🚬📍 🏆 🥇 👑 💎 🚀 ⚡ ☀️ 🌙 🌈 🎀 🪄 🔔 🔥 ⭐ ✅ 💯 🆕 🔑 🧾 🧮 💳 💰'.split(' ') }
     ];
   },
   _productIconPicker(selected = '📦') {

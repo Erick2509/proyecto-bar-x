@@ -1,8 +1,29 @@
-# ProyectoBarX v34
+# ProyectoBarX v35 — Jornadas para operación nocturna
 
-Versión corregida de filtros, totales dinámicos y continuidad de caja durante la madrugada.
+Versión enfocada en bares que comienzan a atender un día y terminan durante la madrugada del siguiente. La operación ya no depende del cambio de fecha: una **jornada** permanece abierta hasta que el usuario la finaliza manualmente.
 
 # PROYECTO X — Firebase + HTML/CSS/JS + Bootstrap
+
+## v35 - Jornada + Caja continua
+
+- Nueva entidad **Jornada** con código automático `JOR-XXXXXX`.
+- Abrir jornada abre también su caja principal; el monto inicial queda separado de las ventas.
+- La jornada puede cruzar medianoche y **nunca se cierra automáticamente**.
+- Ventas, gastos, movimientos de inventario e ingresos/retiros de efectivo quedan vinculados con `jornadaId`.
+- Dashboard prioriza las métricas de la jornada actual: ventas, efectivo, Yape/Plin, tarjeta y gastos.
+- Caja calcula: monto inicial + ventas en efectivo + ingresos − retiros − gastos pagados en efectivo.
+- Nuevo registro de **Ingreso de efectivo** y **Retiro de efectivo**; no se contabilizan como ventas.
+- Al registrar un gasto manual se indica cómo se pagó. Los gastos pagados en efectivo afectan el efectivo esperado del cierre.
+- Historial de **Jornadas** con apertura, cierre, duración, ventas, gastos, estado y diferencia de caja.
+- Historial de ventas, Gastos y Movimientos permiten filtrar por Jornada además del rango de fechas.
+- Si una jornada cruza de día o supera 14 horas se muestra una advertencia, pero el sistema permite continuar vendiendo.
+- Al iniciar sesión con una jornada antigua todavía abierta se muestra una opción para continuarla o revisarla/finalizarla.
+- Compatibilidad con cajas antiguas: una caja abierta de v34 se vincula a una jornada al cargar v35; cajas cerradas anteriores siguen apareciendo como historial legado.
+- Caché PWA actualizado a `proyecto-x-v35`.
+
+**IMPORTANTE:** antes de probar apertura/cierre de jornada o ventas, publica el archivo `firestore.rules` incluido en esta versión.
+
+Consulta `CAMBIOS_V35.md`, `GUIA_JORNADAS_V35.md` y `PRUEBAS_V35.md`.
 
 ## v34 - Filtros rápidos y totales corregidos
 

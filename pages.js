@@ -14,6 +14,59 @@ const Pages = {
   },
   queueGastoFilter() { this._queueFilter('gastos', () => this.filterGastos(false)); },
   queueHistorialFilter() { this._queueFilter('historial', () => this.filterHistorial(false)); },
+
+  _durationLabel(minutes) {
+    minutes=Math.max(0,Number(minutes)||0);
+    const h=Math.floor(minutes/60), m=Math.floor(minutes%60);
+    return h?`${h} h ${m} min`:`${m} min`;
+  },
+  _journeyMatches(record, journeyId) {
+    if(!journeyId)return true;
+    return record?.jornadaId===journeyId || record?.cajaId===journeyId;
+  },
+  _journeyOptions(selected='') {
+    const user=Auth.currentUser();
+    const list=[...Store.state.jornadas]
+      .filter(j=>Auth.isAdmin()||j.usuarioId===user?.id)
+      .sort((a,b)=>(`${b.fechaApertura||b.fecha||''}${b.horaApertura||b.hora||''}`).localeCompare(`${a.fechaApertura||a.fecha||''}${a.horaApertura||a.hora||''}`));
+    return `<option value="">Todas las jornadas</option>`+list.map(j=>{
+      const label=`${j.numero||Store.journeyNumber(j.id)} · ${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}${j.estado==='Abierta'?' · ABIERTA':''}`;
+      return `<option value="${Utils.escapeHtml(j.id)}" ${selected===j.id?'selected':''}>${Utils.escapeHtml(label)}</option>`;
+    }).join('');
+  },
+  _journeyStats(j) {
+    if(!j)return{sales:[],expenses:[],cashMovements:[],pay:{Efectivo:0,Yape:0,Plin:0,Tarjeta:0},totalSales:0,totalExpenses:0,gastosEfectivo:0,ingresos:0,retiros:0,expected:0,duration:0};
+    const sales=Store.state.sales.filter(x=>x.estado!=='Anulada'&&this._journeyMatches(x,j.id));
+    const expenses=Store.state.expenses.filter(x=>this._journeyMatches(x,j.id));
+    const cashMovements=Store.state.cashMovements.filter(x=>this._journeyMatches(x,j.id));
+    const calc=Store.paymentTotals(sales);
+    const pay={
+      Efectivo:j.estado==='Cerrada'&&j.efectivoVentas!=null?Number(j.efectivoVentas||0):calc.Efectivo,
+      Yape:j.estado==='Cerrada'&&j.yapeVentas!=null?Number(j.yapeVentas||0):calc.Yape,
+      Plin:j.estado==='Cerrada'&&j.plinVentas!=null?Number(j.plinVentas||0):calc.Plin,
+      Tarjeta:j.estado==='Cerrada'&&j.tarjetaVentas!=null?Number(j.tarjetaVentas||0):calc.Tarjeta
+    };
+    const totalSales=j.estado==='Cerrada'&&j.totalVentas!=null?Number(j.totalVentas||0):Object.values(pay).reduce((a,b)=>a+b,0);
+    const totalExpenses=j.estado==='Cerrada'&&j.totalGastos!=null?Number(j.totalGastos||0):expenses.reduce((a,e)=>a+Number(e.monto||0),0);
+    const gastosEfectivo=j.estado==='Cerrada'&&j.gastosEfectivo!=null?Number(j.gastosEfectivo||0):expenses.filter(e=>String(e.metodoPago||'Otro')==='Efectivo').reduce((a,e)=>a+Number(e.monto||0),0);
+    const ingresos=j.estado==='Cerrada'&&j.ingresosEfectivo!=null?Number(j.ingresosEfectivo||0):cashMovements.filter(m=>m.tipo==='Ingreso').reduce((a,m)=>a+Number(m.monto||0),0);
+    const retiros=j.estado==='Cerrada'&&j.retirosEfectivo!=null?Number(j.retirosEfectivo||0):cashMovements.filter(m=>m.tipo==='Retiro').reduce((a,m)=>a+Number(m.monto||0),0);
+    const initial=Number(j.montoInicial||0);
+    const expected=j.estado==='Cerrada'&&j.efectivoEsperado!=null?Number(j.efectivoEsperado||0):initial+pay.Efectivo+ingresos-retiros-gastosEfectivo;
+    const duration=j.duracionMinutos!=null?Number(j.duracionMinutos||0):Store.journeyDurationMinutes(j);
+    return{sales,expenses,cashMovements,pay,totalSales:+totalSales.toFixed(2),totalExpenses:+totalExpenses.toFixed(2),gastosEfectivo:+gastosEfectivo.toFixed(2),ingresos:+ingresos.toFixed(2),retiros:+retiros.toFixed(2),expected:+expected.toFixed(2),duration};
+  },
+  selectJourneyFilter(kind) {
+    const map={historial:['hist-journey','hist-from','hist-to',()=>this.filterHistorial(true)],gastos:['gasto-journey','gasto-from','gasto-to',()=>this.filterGastos(true)],movimientos:['mov-journey','mov-from','mov-to',()=>this.filterMovimientos(true)]};
+    const cfg=map[kind];if(!cfg)return;
+    const sel=document.getElementById(cfg[0]),j=Store.state.jornadas.find(x=>x.id===sel?.value);
+    if(j){
+      const from=document.getElementById(cfg[1]),to=document.getElementById(cfg[2]);
+      if(from)from.value=j.fechaApertura||j.fecha||Store.today();
+      if(to)to.value=j.fechaCierre||Store.today();
+    }
+    cfg[3]();
+  },
   _paginateRows(key, tbodyId, page = 1) {
     const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
@@ -31,149 +84,91 @@ const Pages = {
     nav.innerHTML = rows.length > size ? `<button class="btn btn-sm btn-secondary" ${page<=1?'disabled':''} onclick="Pages._paginateRows('${key}','${tbodyId}',${page-1})">‹ Anterior</button><span>Página <strong>${page}</strong> de ${totalPages} · ${rows.length} registros</span><button class="btn btn-sm btn-secondary" ${page>=totalPages?'disabled':''} onclick="Pages._paginateRows('${key}','${tbodyId}',${page+1})">Siguiente ›</button>` : (rows.length ? `<span>${rows.length} registro(s)</span>` : '');
   },
   initPagination(route) {
-    const map={productos:['productos','prod-tbody'],historial:['historial','hist-tbody'],movimientos:['movimientos','mov-tbody'],gastos:['gastos','gasto-tbody'],empleados:['empleados','emp-tbody'],caja:['caja','cash-tbody']};
+    const map={productos:['productos','prod-tbody'],historial:['historial','hist-tbody'],movimientos:['movimientos','mov-tbody'],gastos:['gastos','gasto-tbody'],empleados:['empleados','emp-tbody'],caja:['caja','cash-tbody'],jornadas:['jornadas','journey-tbody']};
     const x=map[route]; if(x) this._paginateRows(x[0],x[1],1);
   },
   // ---------- DASHBOARD ADMIN ----------
   dashboardAdmin() {
-    const salesToday = Store.salesToday();
-    const totalToday = salesToday.reduce((s, x) => s + Number(x.total || 0), 0);
-    const pay = Store.paymentTotals(salesToday);
-    const expToday = Store.expensesToday();
-    const totalExpToday = expToday.reduce((s, x) => s + Number(x.monto || 0), 0);
-    const low = Store.lowStockProducts();
-    const recent = [...salesToday].sort((a, b) => (b.fecha + b.hora).localeCompare(a.fecha + a.hora)).slice(0, 6);
+    const user=Auth.currentUser();
+    const jornada=Store.getOpenJourney(user?.id);
+    const caja=Store.getOpenCash(user?.id);
+    const stats=jornada?this._journeyStats(jornada):null;
+    const salesBase=jornada?stats.sales:Store.salesToday();
+    const totalSales=jornada?stats.totalSales:salesBase.reduce((s,x)=>s+Number(x.total||0),0);
+    const pay=jornada?stats.pay:Store.paymentTotals(salesBase);
+    const expenses=jornada?stats.expenses:Store.expensesToday();
+    const totalExpenses=jornada?stats.totalExpenses:expenses.reduce((s,x)=>s+Number(x.monto||0),0);
+    const low=Store.lowStockProducts();
+    const recent=[...salesBase].sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`)).slice(0,6);
+    const duration=jornada?this._durationLabel(stats.duration):'';
+    const stale=jornada&&stats.duration>=14*60;
 
     return `
       <div class="page-header ux-page-head">
-        <div><h1 class="page-title">📊 Dashboard</h1><p class="ux-page-sub">Resumen de ventas y medios de pago de hoy</p></div>
+        <div><h1 class="page-title">📊 Dashboard</h1><p class="ux-page-sub">${jornada?'Resumen de la jornada actual':'Resumen del día · abre una jornada para iniciar la operación del bar'}</p></div>
       </div>
-      ${(() => { const u=Auth.currentUser(); const c=Store.state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta'); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Desde ${Utils.formatDate(c.fecha)} ${Utils.formatTime(c.hora)} · seguirá abierta hasta que la cierres`:'Abre la caja antes de registrar ventas'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      ${jornada?`
+        <div class="ux-cash-banner is-open">
+          <div><span class="ux-status-dot"></span><strong>🌙 ${Utils.escapeHtml(jornada.numero||Store.journeyNumber(jornada.id))} abierta</strong><small>Desde ${Utils.formatDate(jornada.fechaApertura||jornada.fecha)} ${Utils.formatTime(jornada.horaApertura||jornada.hora)} · ${duration} · continúa aunque cambie el día</small></div>
+          <button class="btn btn-secondary" onclick="Router.go('caja')">Ver jornada</button>
+        </div>
+        ${stale?`<div class="alert ux-cash-overnight"><strong>⚠️ Jornada prolongada</strong><br>Lleva ${duration} abierta. No se cerrará sola; verifica que todavía corresponda continuarla.</div>`:''}
+      `:`<div class="ux-cash-banner is-closed"><div><span class="ux-status-dot"></span><strong>No hay jornada abierta</strong><small>Abre una jornada antes de registrar ventas.</small></div><button class="btn btn-primary" onclick="Router.go('caja')">Abrir jornada</button></div>`}
       <div class="ux-quick-actions">
         <button class="ux-action primary" onclick="Router.go('ventas')"><span>🛒</span><b>Nueva venta</b><small>Cobrar productos</small></button>
         <button class="ux-action" onclick="Router.go('productos')"><span>📦</span><b>Inventario</b><small>Productos y stock</small></button>
         <button class="ux-action" onclick="Router.go('gastos')"><span>💸</span><b>Registrar gasto</b><small>Control de egresos</small></button>
+        <button class="ux-action" onclick="Router.go('jornadas')"><span>🌙</span><b>Jornadas</b><small>Historial por turno</small></button>
       </div>
       <div class="stat-cards">
-        <div class="stat-card">
-          <div class="stat-label">💰 Ventas totales de hoy</div>
-          <div class="stat-value amber">${Utils.formatMoney(totalToday)}</div>
-          <div class="stat-sub">${salesToday.length} venta(s)</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">💵 Total efectivo</div>
-          <div class="stat-value">${Utils.formatMoney(pay.Efectivo)}</div>
-          <div class="stat-sub">Solo ventas, sin monto inicial</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">📱 Yape / Plin</div>
-          <div class="stat-value">${Utils.formatMoney(pay.Yape + pay.Plin)}</div>
-          <div class="stat-sub">Yape ${Utils.formatMoney(pay.Yape)} · Plin ${Utils.formatMoney(pay.Plin)}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">💳 Tarjeta</div>
-          <div class="stat-value">${Utils.formatMoney(pay.Tarjeta)}</div>
-          <div class="stat-sub">Pagos con tarjeta</div>
-        </div>
+        <div class="stat-card"><div class="stat-label">💰 ${jornada?'Ventas de la jornada':'Ventas de hoy'}</div><div class="stat-value amber">${Utils.formatMoney(totalSales)}</div><div class="stat-sub">${salesBase.length} venta(s) válida(s)</div></div>
+        <div class="stat-card"><div class="stat-label">💵 Efectivo</div><div class="stat-value">${Utils.formatMoney(pay.Efectivo)}</div><div class="stat-sub">Solo ventas, sin monto inicial</div></div>
+        <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(pay.Yape+pay.Plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(pay.Yape)} · Plin ${Utils.formatMoney(pay.Plin)}</div></div>
+        <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(pay.Tarjeta)}</div><div class="stat-sub">Pagos con tarjeta</div></div>
       </div>
       <div class="ux-mini-metrics">
-        <span>💸 Gastos hoy <strong>${Utils.formatMoney(totalExpToday)}</strong></span>
+        <span>💸 ${jornada?'Gastos de jornada':'Gastos hoy'} <strong>${Utils.formatMoney(totalExpenses)}</strong></span>
+        ${jornada?`<span>🏁 Monto inicial <strong>${Utils.formatMoney(jornada.montoInicial||caja?.montoInicial||0)}</strong></span>`:''}
         <span>⚠️ Stock bajo / agotado <strong>${low.length}</strong></span>
       </div>
-
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem" class="dash-grid">
         <div class="card">
-          <h3 style="margin-bottom:1rem;font-size:1.1rem">🧾 Ventas recientes</h3>
-          ${recent.length === 0 ? Components.empty('🧾', 'Todavía no hay ventas registradas') : `
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Fecha</th><th>Empleado</th><th>Total</th><th>Método</th></tr></thead>
-                <tbody>
-                  ${recent.map(s => {
-                    const emp = Store.getUser(s.empleadoId);
-                    return `<tr>
-                      <td>${Utils.formatDate(s.fecha)} ${Utils.formatTime(s.hora)}</td>
-                      <td>${Utils.escapeHtml(emp ? emp.nombres : (s.empleadoNombre || '—'))}</td>
-                      <td style="color:var(--amber)">${Utils.formatMoney(s.total)}</td>
-                      <td>${Utils.escapeHtml(Store.salePaymentLabel(s))}</td>
-                    </tr>`;
-                  }).join('')}
-                </tbody>
-              </table>
-            </div>
-          `}
+          <h3 style="margin-bottom:1rem;font-size:1.1rem">🧾 Ventas recientes ${jornada?'de la jornada':'de hoy'}</h3>
+          ${recent.length===0?Components.empty('🧾','Todavía no hay ventas registradas'):`
+            <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Empleado</th><th>Total</th><th>Método</th></tr></thead><tbody>
+              ${recent.map(v=>`<tr><td>${Utils.formatDate(v.fecha)} ${Utils.formatTime(v.hora)}</td><td>${Utils.escapeHtml(Store.getUser(v.empleadoId)?.nombres||v.empleadoNombre||'—')}</td><td style="color:var(--amber)">${Utils.formatMoney(v.total)}</td><td>${Utils.escapeHtml(Store.salePaymentLabel(v))}</td></tr>`).join('')}
+            </tbody></table></div>`}
         </div>
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <h3 style="font-size:1.1rem">📦 Alertas de inventario</h3>
-            <button class="btn btn-sm btn-secondary" onclick="Router.go('productos')">Ver inventario</button>
-          </div>
-          ${low.length === 0 ? Components.empty('✅', 'Todo el stock está en niveles normales') : `
-            <div class="alert-list">
-              ${low.map(p => {
-                const st = Store.stockStatus(p);
-                return `<div class="alert-item ${st === 'agotado' ? 'danger' : ''}">
-                  <span style="font-size:1.3rem">${Utils.escapeHtml(p.imagen || '📦')}</span>
-                  <div class="ai-name">${Utils.escapeHtml(p.nombre)}</div>
-                  <div class="ai-stock">Stock: <strong>${p.stock}</strong> / mín. ${p.stockMinimo}</div>
-                  ${Utils.stockBadge(st)}
-                </div>`;
-              }).join('')}
-            </div>
-          `}
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h3 style="font-size:1.1rem">📦 Alertas de inventario</h3><button class="btn btn-sm btn-secondary" onclick="Router.go('productos')">Ver inventario</button></div>
+          ${low.length===0?Components.empty('✅','Todo el stock está en niveles normales'):`<div class="alert-list">${low.map(p=>{const st=Store.stockStatus(p);return `<div class="alert-item ${st==='agotado'?'danger':''}"><span style="font-size:1.3rem">${Utils.escapeHtml(p.imagen||'📦')}</span><div class="ai-name">${Utils.escapeHtml(p.nombre)}</div><div class="ai-stock">Stock: <strong>${p.stock}</strong> / mín. ${p.stockMinimo}</div>${Utils.stockBadge(st)}</div>`}).join('')}</div>`}
         </div>
       </div>
-      <style>@media(max-width:900px){ .dash-grid{ grid-template-columns:1fr !important; } }</style>
+      <style>@media(max-width:900px){ .dash-grid{grid-template-columns:1fr !important;} }</style>
     `;
   },
 
   // ---------- DASHBOARD EMPLEADO ----------
   dashboardEmployee() {
-    const user = Auth.currentUser();
-    const today = Store.today();
-    const myToday = Store.state.sales.filter(s => s.empleadoId === user.id && s.estado !== 'Anulada' && s.fecha === today);
-    const totalToday = myToday.reduce((s, x) => s + Number(x.total || 0), 0);
-    const itemsSold = myToday.reduce((s, sale) => s + (sale.items||[]).reduce((a, i) => a + Number(i.cantidad||0), 0), 0);
-    const pay=Store.paymentTotals(myToday);
-    const low = Store.lowStockProducts();
-
+    const user=Auth.currentUser();
+    const jornada=Store.getOpenJourney(user?.id);
+    const stats=jornada?this._journeyStats(jornada):null;
+    const sales=jornada?stats.sales:Store.state.sales.filter(v=>v.empleadoId===user.id&&v.estado!=='Anulada'&&v.fecha===Store.today());
+    const total=jornada?stats.totalSales:sales.reduce((a,b)=>a+Number(b.total||0),0);
+    const pay=jornada?stats.pay:Store.paymentTotals(sales);
+    const itemsSold=sales.reduce((s,v)=>s+(v.items||[]).reduce((a,i)=>a+Number(i.cantidad||0),0),0);
+    const duration=jornada?this._durationLabel(stats.duration):'';
     return `
-      <div class="page-header ux-page-head"><div><h1 class="page-title">🏠 Hola, ${Utils.escapeHtml(user.nombres)}</h1><p class="ux-page-sub">Tu actividad de hoy</p></div></div>
-      ${(() => { const c=Store.state.cashSessions.find(x=>x.usuarioId===user.id&&x.estado==='Abierta'); return `<div class="ux-cash-banner ${c?'is-open':'is-closed'}"><div><span class="ux-status-dot"></span><strong>${c?'Caja abierta':'Caja cerrada'}</strong><small>${c?`Desde ${Utils.formatDate(c.fecha)} ${Utils.formatTime(c.hora)} · no se cierra al cambiar de día`:'Debes abrir caja antes de vender'}</small></div><button class="btn ${c?'btn-secondary':'btn-primary'}" onclick="Router.go('caja')">${c?'Ver caja':'Abrir caja'}</button></div>`; })()}
+      <div class="page-header ux-page-head"><div><h1 class="page-title">🏠 Hola, ${Utils.escapeHtml(user.nombres)}</h1><p class="ux-page-sub">${jornada?'Tu actividad en la jornada actual':'Abre una jornada para comenzar a vender'}</p></div></div>
+      ${jornada?`<div class="ux-cash-banner is-open"><div><span class="ux-status-dot"></span><strong>🌙 ${Utils.escapeHtml(jornada.numero||Store.journeyNumber(jornada.id))} abierta</strong><small>Desde ${Utils.formatDate(jornada.fechaApertura||jornada.fecha)} ${Utils.formatTime(jornada.horaApertura||jornada.hora)} · ${duration}</small></div><button class="btn btn-secondary" onclick="Router.go('caja')">Ver jornada</button></div>`:
+      `<div class="ux-cash-banner is-closed"><div><span class="ux-status-dot"></span><strong>No hay jornada abierta</strong><small>Debes abrir una jornada antes de vender.</small></div><button class="btn btn-primary" onclick="Router.go('caja')">Abrir jornada</button></div>`}
       <div class="stat-cards">
-        <div class="stat-card">
-          <div class="stat-label">💰 Mis ventas de hoy</div>
-          <div class="stat-value amber">${Utils.formatMoney(totalToday)}</div>
-          <div class="stat-sub">${myToday.length} venta(s)</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">📦 Productos vendidos</div>
-          <div class="stat-value">${itemsSold}</div>
-          <div class="stat-sub">unidades</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">💵 Efectivo</div>
-          <div class="stat-value">${Utils.formatMoney(pay.Efectivo)}</div>
-          <div class="stat-sub">Ventas cobradas en efectivo</div>
-        </div>
+        <div class="stat-card"><div class="stat-label">💰 ${jornada?'Mis ventas de la jornada':'Mis ventas de hoy'}</div><div class="stat-value amber">${Utils.formatMoney(total)}</div><div class="stat-sub">${sales.length} venta(s)</div></div>
+        <div class="stat-card"><div class="stat-label">📦 Productos vendidos</div><div class="stat-value">${itemsSold}</div><div class="stat-sub">unidades</div></div>
+        <div class="stat-card"><div class="stat-label">💵 Efectivo</div><div class="stat-value">${Utils.formatMoney(pay.Efectivo)}</div><div class="stat-sub">Ventas cobradas en efectivo</div></div>
       </div>
-      <div style="margin-bottom:1.5rem"><button class="btn btn-primary" onclick="Router.go('ventas')" style="padding:0.85rem 1.5rem;font-size:1rem">🛒 Nueva venta</button></div>
-      <div class="card">
-        <h3 style="margin-bottom:1rem;font-size:1.1rem">📦 Alertas de inventario</h3>
-        ${low.length === 0 ? Components.empty('✅', 'Sin alertas de stock') : `
-          <div class="alert-list">
-            ${low.map(p => {
-              const st = Store.stockStatus(p);
-              return `<div class="alert-item ${st === 'agotado' ? 'danger' : ''}">
-                <span style="font-size:1.3rem">${Utils.escapeHtml(p.imagen || '📦')}</span>
-                <div class="ai-name">${Utils.escapeHtml(p.nombre)}</div>
-                <div class="ai-stock">Stock: <strong>${p.stock}</strong></div>
-                ${Utils.stockBadge(st)}
-              </div>`;
-            }).join('')}
-          </div>
-        `}
-      </div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1.5rem"><button class="btn btn-primary" onclick="Router.go('ventas')" style="padding:0.85rem 1.5rem;font-size:1rem">🛒 Nueva venta</button><button class="btn btn-secondary" onclick="Router.go('jornadas')">🌙 Mis jornadas</button></div>
+      <div class="card"><h3 style="margin-bottom:.75rem">💡 Cómo funciona la jornada</h3><p class="ux-help">Tu jornada puede seguir abierta después de medianoche. Todas las ventas continúan dentro del mismo turno hasta que tú la cierres desde Caja.</p></div>
     `;
   },
 
@@ -553,7 +548,7 @@ const Pages = {
       { id:'numeros', nombre:'🔢 Números', keywords:'pack unidad unidades numero cantidad', icons:'0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟 #️⃣ *️⃣'.split(' ') },
       { id:'simbolos', nombre:'🔴 Símbolos', keywords:'color circulo cuadrado corazon flecha check alerta', icons:'🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟤 🟥 🟧 🟨 🟩 🟦 🟪 ⬛ ⬜ ❤️ 🧡 💛 💚 💙 💜 ✅ ❌ ⚠️ ❗ ❓ ➕ ➖ 🔥 ⭐'.split(' ') },
       { id:'caras', nombre:'😀 Caras', keywords:'cara feliz emoji sonrisa amor fiesta', icons:'😀 😃 😄 😁 😆 😅 😂 🙂 😊 😋 😎 😍 🥰 😘 🤩 🥳 😜 🤤 😇 🤠 🤑 🤗 🤝 👍 👌 🙌 👏 💪'.split(' ') },
-      { id:'otros', nombre:'💎 Otros', keywords:'otro favorito premium rapido importante disponible cigarro', icons:'📌 🚬 📍 🏆 🥇 👑 💎 🚀 ⚡ ☀️ 🌙 🌈 🎀 🪄 🔔 🔥 ⭐ ✅ 💯 🆕 🔑 🧾 🧮 💳 💰'.split(' ') }
+      { id:'otros', nombre:'💎 Otros', keywords:'otro favorito premium rapido importante disponible', icons:'📌 📍 🏆 🥇 👑 💎 🚀 ⚡ ☀️ 🌙 🌈 🎀 🪄 🔔 🔥 ⭐ ✅ 💯 🆕 🔑 🧾 🧮 💳 💰'.split(' ') }
     ];
   },
   _productIconPicker(selected = '📦') {
@@ -879,6 +874,7 @@ const Pages = {
         <select class="filter-select" id="mov-type" onchange="Pages.filterMovimientos()">
           <option value="">Todos los movimientos</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Merma">Merma</option><option value="Ajuste +">Ajuste +</option><option value="Ajuste -">Ajuste -</option><option value="Venta">Venta</option><option value="Devolución">Devolución</option><option value="Eliminación">Eliminación</option>
         </select>
+        <select class="filter-select" id="mov-journey" onchange="Pages.selectJourneyFilter('movimientos')">${this._journeyOptions()}</select>
         <label class="ux-date-filter">Desde<input type="date" id="mov-from" class="filter-select" value="${desde}" onchange="Pages.filterMovimientos(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="mov-to" class="filter-select" value="${hasta}" onchange="Pages.filterMovimientos(true)" /></label>
       </div>
@@ -908,13 +904,14 @@ const Pages = {
   async filterMovimientos(loadRange=false) {
     const q=(document.getElementById('mov-search')?.value||'').trim().toLowerCase();
     const type=document.getElementById('mov-type')?.value||'';
+    const journeyId=document.getElementById('mov-journey')?.value||'';
     const desde=document.getElementById('mov-from')?.value||Store.daysAgo(30);
     const hasta=document.getElementById('mov-to')?.value||Store.today();
     if(desde>hasta)return Toast.show('La fecha Desde no puede ser posterior a Hasta','error');
     if(loadRange && Store.loadMovementsForRange) await Store.loadMovementsForRange(desde,hasta);
     const list=[...Store.state.movements].filter(m=>{
       const name=(Store.getProduct(m.productoId)?.nombre||m.productoNombre||'').toLowerCase();
-      return String(m.fecha||'')>=desde&&String(m.fecha||'')<=hasta&&(!type||m.tipo===type)&&(!q||name.includes(q)||String(m.motivo||'').toLowerCase().includes(q));
+      return String(m.fecha||'')>=desde&&String(m.fecha||'')<=hasta&&this._journeyMatches(m,journeyId)&&(!type||m.tipo===type)&&(!q||name.includes(q)||String(m.motivo||'').toLowerCase().includes(q));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
     const tbody=document.getElementById('mov-tbody');
     if(tbody){tbody.innerHTML=this._movRows(list);App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document);this._paginateRows('movimientos','mov-tbody',1);}
@@ -943,20 +940,21 @@ const Pages = {
           <option value="">Todas las categorías</option><option value="Stock">Compra de stock</option><option value="Alquiler">Alquiler</option><option value="Servicios">Servicios</option><option value="Personal">Personal</option><option value="Mantenimiento">Mantenimiento</option><option value="Otros">Otros</option>
         </select>
         <select class="filter-select" id="gasto-origin-filter" onchange="Pages.filterGastos()"><option value="">Todos los orígenes</option><option value="Manual">Manual</option><option value="auto">Inventario automático</option></select>
+        <select class="filter-select" id="gasto-journey" onchange="Pages.selectJourneyFilter('gastos')">${this._journeyOptions()}</select>
         <label class="ux-date-filter">Desde<input type="date" id="gasto-from" class="filter-select" value="${desde}" onchange="Pages.filterGastos(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="gasto-to" class="filter-select" value="${hasta}" onchange="Pages.filterGastos(true)" /></label>
       </div>
       <div class="ux-filter-actions"><span>⚡ El total se actualiza automáticamente al cambiar cualquier filtro.</span><button class="btn btn-sm btn-secondary" onclick="Pages.resetGastoFilters()">↺ Limpiar filtros</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Fecha</th><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th><th>Origen</th><th>Usuario</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th><th>Pago</th><th>Origen</th><th>Usuario</th><th>Acciones</th></tr></thead>
           <tbody id="gasto-tbody">${this._gastoRows(expenses)}</tbody>
         </table>
       </div>
     `;
   },
   _gastoRows(list) {
-    if (!list.length) return `<tr><td colspan="8">${Components.empty('💸', 'No hay gastos para los filtros elegidos')}</td></tr>`;
+    if (!list.length) return `<tr><td colspan="9">${Components.empty('💸', 'No hay gastos para los filtros elegidos')}</td></tr>`;
     return list.map(e => {
       const u = Store.getUser(e.usuarioId);
       const manual=String(e.origen||'Manual')==='Manual';
@@ -965,9 +963,10 @@ const Pages = {
         <td data-label="Concepto">${Utils.escapeHtml(e.concepto||'—')}</td>
         <td data-label="Categoría"><span class="badge badge-neutral">${Utils.escapeHtml(e.categoria||'Otros')}</span></td>
         <td data-label="Monto" style="color:var(--amber);font-weight:600">${Utils.formatMoney(e.monto)}</td>
+        <td data-label="Pago">${Utils.escapeHtml(e.metodoPago||'Otro')}</td>
         <td data-label="Origen">${manual?'<span class="badge badge-accent">✍️ Manual</span>':'<span class="badge badge-success">📦 Inventario</span>'}</td>
         <td data-label="Usuario">${Utils.escapeHtml(u ? u.nombres : (e.usuarioNombre||'—'))}</td>
-        <td data-label="Acciones" class="table-actions">${manual?`<button class="btn btn-sm btn-secondary" onclick="Pages.openGastoForm('${e.id}')">✏️ Editar</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteGasto('${e.id}')">🗑️ Eliminar</button>`:'<span class="ux-auto-locked" title="Este registro viene del inventario y se conserva para mantener el historial">🔒 Automático</span>'}</td>
+        <td data-label="Acciones" class="table-actions"><button class="btn btn-sm btn-secondary" onclick="Pages.openGastoForm('${e.id}')">✏️ Editar</button><button class="btn btn-sm btn-danger" onclick="Pages.deleteGasto('${e.id}')">🗑️ Eliminar</button></td>
       </tr>`;
     }).join('');
   },
@@ -978,9 +977,10 @@ const Pages = {
     const q=(document.getElementById('gasto-search')?.value||'').trim().toLowerCase();
     const cat=document.getElementById('gasto-cat-filter')?.value||'';
     const origin=document.getElementById('gasto-origin-filter')?.value||'';
+    const journeyId=document.getElementById('gasto-journey')?.value||'';
     const list=[...Store.state.expenses].filter(e=>{
       const auto=String(e.origen||'Manual')!=='Manual';
-      return String(e.fecha||'')>=desde&&String(e.fecha||'')<=hasta&&(!q||String(e.concepto||'').toLowerCase().includes(q))&&(!cat||e.categoria===cat)&&(!origin||(origin==='Manual'?!auto:auto));
+      return String(e.fecha||'')>=desde&&String(e.fecha||'')<=hasta&&this._journeyMatches(e,journeyId)&&(!q||String(e.concepto||'').toLowerCase().includes(q))&&(!cat||e.categoria===cat)&&(!origin||(origin==='Manual'?!auto:auto));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
 
     // Actualizar primero las cifras. Aunque falle un detalle visual de la tabla,
@@ -990,7 +990,7 @@ const Pages = {
     const rangeEl=document.getElementById('gasto-range-label');
     const countEl=document.getElementById('gasto-count');
     if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);totalEl.title=syncing?'Sincronizando con Firebase…':'';}
-    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${syncing?' · sincronizando…':''}`;
+    if(rangeEl){const j=Store.state.jornadas.find(x=>x.id===journeyId);rangeEl.textContent=`${j?`Jornada: ${j.numero||Store.journeyNumber(j.id)} · `:''}${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${syncing?' · sincronizando…':''}`;}
     if(countEl)countEl.textContent=String(list.length);
 
     const tbody=document.getElementById('gasto-tbody');
@@ -1011,22 +1011,23 @@ const Pages = {
     this._applyGastoFilters();
   },
   resetGastoFilters() {
-    const q=document.getElementById('gasto-search'),cat=document.getElementById('gasto-cat-filter'),origin=document.getElementById('gasto-origin-filter'),from=document.getElementById('gasto-from'),to=document.getElementById('gasto-to');
-    if(q)q.value='';if(cat)cat.value='';if(origin)origin.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
+    const q=document.getElementById('gasto-search'),cat=document.getElementById('gasto-cat-filter'),origin=document.getElementById('gasto-origin-filter'),journey=document.getElementById('gasto-journey'),from=document.getElementById('gasto-from'),to=document.getElementById('gasto-to');
+    if(q)q.value='';if(cat)cat.value='';if(origin)origin.value='';if(journey)journey.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
     this.filterGastos(true);
   },
   openGastoForm(id='') {
     const e=id?Store.state.expenses.find(x=>x.id===id):null;
-    if(e && String(e.origen||'Manual')!=='Manual')return Toast.show('Los gastos automáticos de inventario son de solo lectura','error');
+
     Modal.open(`
       <div class="modal-header"><h2>${e?'✏️ Editar gasto':'➕ Nuevo gasto'}</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
       <div class="modal-body">
         <div class="form-group"><label>Concepto / descripción *</label><input type="text" id="gasto-concepto" required placeholder="Ej. Pago de luz" value="${Utils.escapeHtml(e?.concepto||'')}" /></div>
         <div class="form-group"><label>Categoría *</label><select id="gasto-categoria">
-          ${['Alquiler','Servicios','Personal','Mantenimiento','Otros'].map(c=>`<option value="${c}" ${e?.categoria===c?'selected':''}>${c}</option>`).join('')}
+          ${['Stock','Alquiler','Servicios','Personal','Mantenimiento','Otros'].map(c=>`<option value="${c}" ${e?.categoria===c?'selected':''}>${c}</option>`).join('')}
         </select></div>
         <div class="form-group"><label>Monto (S/) *</label><input type="number" id="gasto-monto" step="0.01" min="0.01" required value="${e?Number(e.monto||0).toFixed(2):''}" /></div>
-        <p style="font-size:0.8rem;color:var(--text-muted)">${e?'Se conservarán la fecha, hora y usuario originales.':'La fecha y hora se registran automáticamente al confirmar.'}</p>
+        <div class="form-group"><label>¿Cómo se pagó? *</label><select id="gasto-metodo">${['Efectivo','Yape','Plin','Tarjeta','Otro'].map(m=>`<option value="${m}" ${(e?.metodoPago||'Otro')===m?'selected':''}>${m}</option>`).join('')}</select><small class="ux-help">Si eliges Efectivo y hay una jornada abierta, este gasto se descontará del efectivo esperado al cierre.</small></div>
+        <p style="font-size:0.8rem;color:var(--text-muted)">${e?'Se conservarán la fecha, hora, origen, usuario y movimientos de inventario originales. La edición quedará auditada.':'La fecha y hora se registran automáticamente al confirmar. Si hay una jornada abierta, el gasto quedará vinculado a ella.'}</p>
       </div>
       <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Pages.saveGasto('${id}')">${e?'Guardar cambios':'Registrar'}</button></div>
     `);
@@ -1035,16 +1036,17 @@ const Pages = {
     const concepto=(document.getElementById('gasto-concepto')?.value||'').trim();
     const categoria=document.getElementById('gasto-categoria')?.value||'Otros';
     const monto=Number(document.getElementById('gasto-monto')?.value);
+    const metodoPago=document.getElementById('gasto-metodo')?.value||'Otro';
     if(!concepto||!Number.isFinite(monto)||monto<=0)return Toast.show('Completa concepto y monto válido','error');
-    return confirmAction(`${id?'Guardar cambios del gasto':'Registrar el gasto'} “${concepto}” por ${Utils.formatMoney(monto)}. ¿Confirmar?`,async()=>{
-      const r=id?await Store.updateExpense(id,{concepto,categoria,monto}):await Store.addExpense({concepto,categoria,monto});
+    return confirmAction(`${id?'Guardar cambios del gasto':'Registrar el gasto'} “${concepto}” por ${Utils.formatMoney(monto)} (${metodoPago}). ¿Confirmar?`,async()=>{
+      const r=id?await Store.updateExpense(id,{concepto,categoria,monto,metodoPago}):await Store.addExpense({concepto,categoria,monto,metodoPago});
       if(!r.ok){Toast.show(r.error||'No se pudo guardar el gasto','error');return r;}
       Modal.close();Toast.show(id?'Gasto actualizado':'Gasto registrado');Router.go('gastos');return r;
     },{title:id?'Confirmar edición':'Confirmar gasto',confirmText:id?'Guardar cambios':'Registrar gasto',danger:false,key:'gasto:'+id});
   },
   deleteGasto(id) {
     const e=Store.state.expenses.find(x=>x.id===id);if(!e)return Toast.show('Gasto no encontrado','error');
-    confirmAction(`Eliminar el gasto “${e.concepto||''}” por ${Utils.formatMoney(e.monto)}. Esta acción no se puede deshacer.`,async()=>{
+    confirmAction(`Eliminar el gasto “${e.concepto||''}” por ${Utils.formatMoney(e.monto)}. Se archivará el gasto para auditoría; los movimientos de stock originales se conservarán.`,async()=>{
       const r=await Store.deleteExpense(id);Toast.show(r.ok?'Gasto eliminado':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('gastos')}return r;
     },{title:'Eliminar gasto',confirmText:'Eliminar',danger:true,key:'delete-expense:'+id});
   },
@@ -1164,7 +1166,7 @@ const Pages = {
     const u = Auth.currentUser();
     const cajaAbierta = Store.state.cashSessions.find(c => c.usuarioId === u.id && c.estado === 'Abierta');
     if (!cajaAbierta) {
-      Modal.open(`<div class="modal-header"><h2>⚠️ Caja cerrada</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div><div class="modal-body"><p>Antes de registrar una venta debes <strong>abrir una caja</strong>. Una vez abierta, seguirá activa aunque pase medianoche hasta que la cierres manualmente.</p></div><div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Ir a Caja</button></div>`);
+      Modal.open(`<div class="modal-header"><h2>⚠️ No hay jornada abierta</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div><div class="modal-body"><p>Antes de registrar una venta debes <strong>abrir una jornada</strong>. La jornada y su caja seguirán activas aunque pase medianoche hasta que las finalices manualmente.</p></div><div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Ir a Jornada y Caja</button></div>`);
       return;
     }
     const half=+(total/2).toFixed(2), rest=+(total-half).toFixed(2);
@@ -1257,6 +1259,7 @@ const Pages = {
       <div class="toolbar ux-filter-grid">
         <input type="search" class="search-input" id="hist-search" placeholder="🔎 Buscar..." oninput="Pages.queueHistorialFilter()" />
         <select class="filter-select" id="hist-method" onchange="Pages.filterHistorial()"><option value="">Todos los métodos</option><option value="Efectivo">Efectivo</option><option value="Yape">Yape</option><option value="Plin">Plin</option><option value="Tarjeta">Tarjeta</option></select>
+        <select class="filter-select" id="hist-journey" onchange="Pages.selectJourneyFilter('historial')">${this._journeyOptions()}</select>
         <label class="ux-date-filter">Desde<input type="date" id="hist-from" class="filter-select" value="${desde}" onchange="Pages.filterHistorial(true)" /></label>
         <label class="ux-date-filter">Hasta<input type="date" id="hist-to" class="filter-select" value="${hasta}" onchange="Pages.filterHistorial(true)" /></label>
       </div>
@@ -1277,6 +1280,7 @@ const Pages = {
     const hasta=document.getElementById('hist-to')?.value||Store.today();
     if(desde>hasta){Toast.show('La fecha Desde no puede ser posterior a Hasta','error');return null;}
     const method=(document.getElementById('hist-method')?.value||'').trim();
+    const journeyId=document.getElementById('hist-journey')?.value||'';
     const q=(document.getElementById('hist-search')?.value||'').trim().toLowerCase();
     const user=Auth.currentUser();
     let sales=[...Store.state.sales];
@@ -1286,7 +1290,7 @@ const Pages = {
       const products=(Array.isArray(s.items)?s.items:[]).map(i=>Store.getProduct(i.productoId)?.nombre||i?.nombre||'').join(' ');
       const haystack=`${s.numero||s.id||''} ${emp?.nombres||s.empleadoNombre||''} ${emp?.apellidos||''} ${products} ${Store.salePaymentLabel(s)}`.toLowerCase();
       const methods=Store.getSalePayments(s).map(p=>p.metodo);
-      return String(s.fecha||'')>=desde&&String(s.fecha||'')<=hasta&&(!method||methods.includes(method))&&(!q||haystack.includes(q));
+      return String(s.fecha||'')>=desde&&String(s.fecha||'')<=hasta&&this._journeyMatches(s,journeyId)&&(!method||methods.includes(method))&&(!q||haystack.includes(q));
     }).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
 
     const valid=sales.filter(s=>s.estado!=='Anulada');
@@ -1306,7 +1310,7 @@ const Pages = {
     const labelEl=document.getElementById('hist-total-label');
     if(totalEl){totalEl.classList.remove('ux-value-loading');totalEl.textContent=Utils.formatMoney(total);totalEl.title=syncing?'Sincronizando con Firebase…':'';}
     if(labelEl)labelEl.textContent=method?`💰 Total cobrado en ${method}`:'💰 Total vendido en este filtro';
-    if(rangeEl)rangeEl.textContent=`${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${method?' · en pagos separados se suma solo ese método':''}${syncing?' · sincronizando…':''}`;
+    if(rangeEl){const j=Store.state.jornadas.find(x=>x.id===journeyId);rangeEl.textContent=`${j?`Jornada: ${j.numero||Store.journeyNumber(j.id)} · `:''}${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}${method?' · en pagos separados se suma solo ese método':''}${syncing?' · sincronizando…':''}`;}
     if(countEl)countEl.textContent=String(sales.length);
     if(validEl)validEl.textContent=`${valid.length} completada(s)`;
     if(annulledEl)annulledEl.textContent=`${annulled.length} anulada(s)`;
@@ -1329,8 +1333,8 @@ const Pages = {
     this._applyHistorialFilters();
   },
   resetHistFilters() {
-    const q=document.getElementById('hist-search'),method=document.getElementById('hist-method'),from=document.getElementById('hist-from'),to=document.getElementById('hist-to');
-    if(q)q.value='';if(method)method.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
+    const q=document.getElementById('hist-search'),method=document.getElementById('hist-method'),journey=document.getElementById('hist-journey'),from=document.getElementById('hist-from'),to=document.getElementById('hist-to');
+    if(q)q.value='';if(method)method.value='';if(journey)journey.value='';if(from)from.value=Store.daysAgo(30);if(to)to.value=Store.today();
     this.filterHistorial(true);
   },
   showSaleDetail(id) {
@@ -1341,6 +1345,7 @@ const Pages = {
       <div class="modal-body">
         <div class="detail-row"><span class="dr-label">Fecha</span><span class="dr-value">${Utils.formatDate(s.fecha)} ${Utils.formatTime(s.hora)}</span></div>
         <div class="detail-row"><span class="dr-label">Empleado</span><span class="dr-value">${Utils.escapeHtml(emp?`${emp.nombres} ${emp.apellidos}`:(s.empleadoNombre||'—'))}</span></div>
+        <div class="detail-row"><span class="dr-label">Jornada</span><span class="dr-value">${Utils.escapeHtml((()=>{const j=Store.state.jornadas.find(x=>x.id===(s.jornadaId||s.cajaId));return j?.numero||Store.journeyNumber(s.jornadaId||s.cajaId)||'—'})())}</span></div>
         <div class="detail-row"><span class="dr-label">Pago</span><span class="dr-value">${Utils.escapeHtml(Store.salePaymentLabel(s))}</span></div>
         ${pagos.length>1?`<div class="ux-payment-detail">${pagos.map(p=>`<span>${Utils.escapeHtml(p.metodo)} <strong>${Utils.formatMoney(p.monto)}</strong></span>`).join('')}</div>`:''}
         <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem">📦 Productos</h4>
@@ -1389,42 +1394,240 @@ const Pages = {
     }
   },
   caja() {
-    const u=Auth.currentUser(),abierta=Store.state.cashSessions.find(c=>c.usuarioId===u.id&&c.estado==='Abierta');
+    const u=Auth.currentUser();
+    const jornada=Store.getOpenJourney(u?.id);
+    const caja=Store.getOpenCash(u?.id);
+    const stats=jornada?this._journeyStats(jornada):null;
+    const montoInicial=Number(jornada?.montoInicial??caja?.montoInicial??0);
     const hoy=Store.today();
-    const ventasCaja=abierta?Store.state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===abierta.id&&s.estado!=='Anulada'):[];
-    const pay=Store.paymentTotals(ventasCaja),efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta,totalCaja=+(efectivo+yape+plin+tarjeta).toFixed(2);
-    const montoInicial=Number(abierta?.montoInicial||0),esperado=+(montoInicial+efectivo).toFixed(2);
-    const hist=[...Store.state.cashSessions].filter(c=>Auth.isAdmin()||c.usuarioId===u.id).sort((a,b)=>(`${b.fecha||''}${b.hora||''}`).localeCompare(`${a.fecha||''}${a.hora||''}`));
-    const cruzoMedianoche=!!abierta&&abierta.fecha!==hoy;
-    const metricasCaja=c=>{
-      const sales=Store.state.sales.filter(s=>s.cajaId===c.id&&s.estado!=='Anulada'),calc=Store.paymentTotals(sales);
-      const fallbackTotal=calc.Efectivo+calc.Yape+calc.Plin+calc.Tarjeta;
-      return{total:c.totalVentasDia==null?fallbackTotal:Number(c.totalVentasDia||0),efectivo:c.efectivoVentas==null?calc.Efectivo:Number(c.efectivoVentas||0),yape:c.yapeVentas==null?calc.Yape:Number(c.yapeVentas||0),plin:c.plinVentas==null?calc.Plin:Number(c.plinVentas||0),tarjeta:c.tarjetaVentas==null?calc.Tarjeta:Number(c.tarjetaVentas||0)};
-    };
-    const historyRows=hist.map(c=>{
-      const m=metricasCaja(c),isOpen=c.estado==='Abierta',diff=c.diferencia==null?null:Number(c.diferencia||0);
-      const status=isOpen?'<span class="badge badge-success">● Abierta</span>':`<span class="badge badge-neutral">Cerrada</span>${c.fechaCierre?`<small class="ux-cash-closed-at">${Utils.formatDate(c.fechaCierre)} ${Utils.formatTime(c.horaCierre||'')}</small>`:''}`;
-      const diffHtml=isOpen?'<span class="badge badge-warning">Pendiente</span>':Math.abs(diff||0)<0.005?'<span class="badge badge-success">S/ 0.00</span>':`<span class="badge ${diff<0?'badge-danger':'badge-warning'}">${diff>0?'+':''}${Utils.formatMoney(diff)}</span>`;
-      return `<tr class="${isOpen?'ux-cash-row-open':''}"><td data-label="Apertura"><div class="ux-cash-date"><strong>${Utils.formatDate(c.fecha)}</strong><small>${Utils.formatTime(c.hora)}</small></div></td><td data-label="Usuario"><strong>${Utils.escapeHtml(c.usuarioNombre||'—')}</strong></td><td data-label="Monto inicial"><strong>${Utils.formatMoney(c.montoInicial||0)}</strong></td><td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(m.total)}</strong></td><td data-label="Efectivo ventas">${Utils.formatMoney(m.efectivo)}</td><td data-label="Yape / Plin"><div class="ux-split-payment"><span>Yape <strong>${Utils.formatMoney(m.yape)}</strong></span><span>Plin <strong>${Utils.formatMoney(m.plin)}</strong></span></div></td><td data-label="Tarjeta">${Utils.formatMoney(m.tarjeta)}</td><td data-label="Estado"><div class="ux-cash-status-cell">${status}</div></td><td data-label="Diferencia">${diffHtml}</td></tr>`;
-    }).join('')||'<tr><td colspan="9">Sin registros de caja</td></tr>';
-    return `<div class="page-header ux-page-head"><div><h1 class="page-title">💰 Caja</h1><p class="ux-page-sub">La caja permanece abierta hasta que tú la cierres. Cambiar de día o pasar medianoche no la cierra.</p></div></div>
-      ${cruzoMedianoche?`<div class="alert ux-cash-overnight"><strong>🌙 La caja sigue abierta desde ${Utils.formatDate(abierta.fecha)} ${Utils.formatTime(abierta.hora)}</strong><br>Puedes continuar vendiendo normalmente. Las ventas de hoy seguirán perteneciendo a esta misma caja hasta que pulses <strong>Cerrar caja</strong>.</div>`:''}
-      <div class="ux-cash-how"><span>1️⃣ Abre al iniciar el turno</span><span>2️⃣ Vende durante toda la jornada, incluso después de medianoche</span><span>3️⃣ Cierra cuando termine realmente el turno</span></div>
-      <div class="ux-cash-hero ${abierta?'is-open':'is-closed'}"><div class="ux-cash-state"><span class="ux-status-dot"></span><div><small>ESTADO ACTUAL</small><h2>${abierta?'CAJA ABIERTA':'CAJA CERRADA'}</h2><p>${abierta?`Abierta desde ${Utils.formatDate(abierta.fecha)} ${Utils.formatTime(abierta.hora)} · Monto inicial ${Utils.formatMoney(montoInicial)}`:'Abre una caja al iniciar tu turno'}</p></div></div></div>
+    const cruzoMedianoche=!!jornada&&(jornada.fechaApertura||jornada.fecha)!==hoy;
+    const stale=!!jornada&&stats.duration>=14*60;
+    const history=[...Store.state.jornadas]
+      .filter(j=>Auth.isAdmin()||j.usuarioId===u.id)
+      .sort((a,b)=>(`${b.fechaApertura||b.fecha||''}${b.horaApertura||b.hora||''}`).localeCompare(`${a.fechaApertura||a.fecha||''}${a.horaApertura||a.hora||''}`))
+      .slice(0,20);
+
+    const historyRows=history.map(j=>{
+      const st=this._journeyStats(j);
+      const open=j.estado==='Abierta';
+      const status=open?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>';
+      const cierre=open?'—':`${Utils.formatDate(j.fechaCierre)} ${Utils.formatTime(j.horaCierre||'')}`;
+      const diff=open?'<span class="badge badge-warning">Pendiente</span>':Math.abs(Number(j.diferencia||0))<0.005?'<span class="badge badge-success">S/ 0.00</span>':`<span class="badge ${Number(j.diferencia||0)<0?'badge-danger':'badge-warning'}">${Number(j.diferencia||0)>0?'+':''}${Utils.formatMoney(j.diferencia||0)}</span>`;
+      return `<tr class="${open?'ux-cash-row-open':''}">
+        <td data-label="Jornada"><strong>${Utils.escapeHtml(j.numero||Store.journeyNumber(j.id))}</strong></td>
+        <td data-label="Apertura">${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}</td>
+        <td data-label="Responsable">${Utils.escapeHtml(j.usuarioNombre||Store.getUser(j.usuarioId)?.nombres||'—')}</td>
+        <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(st.totalSales)}</strong></td>
+        <td data-label="Gastos">${Utils.formatMoney(st.totalExpenses)}</td>
+        <td data-label="Duración">${this._durationLabel(st.duration)}</td>
+        <td data-label="Estado">${status}<small class="ux-cash-closed-at">${cierre}</small></td>
+        <td data-label="Diferencia">${diff}</td>
+        <td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.viewJornada('${j.id}')">👁️ Ver</button></td>
+      </tr>`;
+    }).join('')||'<tr><td colspan="9">Todavía no hay jornadas registradas</td></tr>';
+
+    return `<div class="page-header ux-page-head">
+      <div><h1 class="page-title">🌙 Jornada y Caja</h1><p class="ux-page-sub">Una jornada puede empezar hoy y terminar mañana. No se cierra automáticamente a medianoche.</p></div>
+      <button class="btn btn-secondary" onclick="Router.go('jornadas')">📚 Ver todas las jornadas</button>
+    </div>
+    ${cruzoMedianoche?`<div class="alert ux-cash-overnight"><strong>🌙 La jornada continúa desde ${Utils.formatDate(jornada.fechaApertura||jornada.fecha)} ${Utils.formatTime(jornada.horaApertura||jornada.hora)}</strong><br>El cambio de fecha no afecta la caja. Todas las ventas siguen dentro de <strong>${Utils.escapeHtml(jornada.numero||Store.journeyNumber(jornada.id))}</strong> hasta que la finalices.</div>`:''}
+    ${stale?`<div class="alert ux-journey-warning"><strong>⚠️ Esta jornada lleva ${this._durationLabel(stats.duration)} abierta.</strong><br>No se cerrará sola. Si el bar todavía está atendiendo puedes continuar; si ya terminó la atención, revisa la caja y finalízala.</div>`:''}
+    <div class="ux-cash-how"><span>1️⃣ Abre la jornada al iniciar</span><span>2️⃣ Vende durante toda la noche, aunque pase medianoche</span><span>3️⃣ Finaliza la jornada cuando termine realmente la atención</span></div>
+
+    <div class="ux-cash-hero ${jornada?'is-open':'is-closed'}">
+      <div class="ux-cash-state"><span class="ux-status-dot"></span><div>
+        <small>ESTADO OPERATIVO</small>
+        <h2>${jornada?'JORNADA ABIERTA':'SIN JORNADA ABIERTA'}</h2>
+        <p>${jornada?`${Utils.escapeHtml(jornada.numero||Store.journeyNumber(jornada.id))} · desde ${Utils.formatDate(jornada.fechaApertura||jornada.fecha)} ${Utils.formatTime(jornada.horaApertura||jornada.hora)} · ${this._durationLabel(stats.duration)}`:'Abre una jornada cuando el bar empiece a atender.'}</p>
+      </div></div>
+    </div>
+
+    ${jornada?`
       <div class="stat-cards ux-payment-summary">
-        <div class="stat-card"><div class="stat-label">💰 Total vendido en esta caja</div><div class="stat-value amber">${Utils.formatMoney(totalCaja)}</div><div class="stat-sub">${ventasCaja.length} venta(s) desde la apertura · no incluye monto inicial</div></div>
-        <div class="stat-card"><div class="stat-label">🏁 Monto inicial</div><div class="stat-value">${Utils.formatMoney(montoInicial)}</div><div class="stat-sub">Solo registro de apertura</div></div>
-        <div class="stat-card"><div class="stat-label">💵 Efectivo de ventas</div><div class="stat-value">${Utils.formatMoney(efectivo)}</div><div class="stat-sub">Efectivo esperado en caja: ${Utils.formatMoney(esperado)}</div></div>
-        <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(yape+plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(yape)} · Plin ${Utils.formatMoney(plin)}</div></div>
-        <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(tarjeta)}</div><div class="stat-sub">Pagos con tarjeta</div></div>
+        <div class="stat-card"><div class="stat-label">💰 Ventas de la jornada</div><div class="stat-value amber">${Utils.formatMoney(stats.totalSales)}</div><div class="stat-sub">${stats.sales.length} venta(s) válida(s)</div></div>
+        <div class="stat-card"><div class="stat-label">💵 Efectivo de ventas</div><div class="stat-value">${Utils.formatMoney(stats.pay.Efectivo)}</div><div class="stat-sub">No incluye monto inicial</div></div>
+        <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(stats.pay.Yape+stats.pay.Plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(stats.pay.Yape)} · Plin ${Utils.formatMoney(stats.pay.Plin)}</div></div>
+        <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(stats.pay.Tarjeta)}</div><div class="stat-sub">Pagos con tarjeta</div></div>
+        <div class="stat-card"><div class="stat-label">💸 Gastos de la jornada</div><div class="stat-value">${Utils.formatMoney(stats.totalExpenses)}</div><div class="stat-sub">En efectivo: ${Utils.formatMoney(stats.gastosEfectivo)}</div></div>
       </div>
       <div class="ux-cash-layout">
-        <div class="card ux-cash-action"><h3>${abierta?'🔒 Cerrar caja al terminar el turno':'🔓 Abrir caja'}</h3>${abierta?`<p class="ux-help ux-help-prominent">No necesitas cerrar a medianoche. Hazlo solo cuando termine la atención o cambie el responsable de caja.</p><div class="ux-money-row"><span>Monto inicial</span><strong>${Utils.formatMoney(montoInicial)}</strong></div><div class="ux-money-row"><span>Ventas en efectivo</span><strong>${Utils.formatMoney(efectivo)}</strong></div><div class="ux-money-row"><span>Efectivo esperado</span><strong>${Utils.formatMoney(esperado)}</strong></div><label class="form-label">Efectivo real contado al cierre</label><input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${esperado.toFixed(2)}"><p class="ux-help">Compara el monto inicial + todo el efectivo vendido durante esta sesión, aunque haya pasado al día siguiente.</p><button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Cerrar caja y finalizar turno</button>`:`<label class="form-label">Monto inicial en efectivo</label><input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0"><p class="ux-help">Este monto queda separado de las ventas. La caja seguirá abierta hasta que decidas cerrarla.</p><button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir caja y comenzar turno</button>`}</div>
-        <div class="card ux-cash-history-card"><div class="ux-section-head ux-cash-history-head"><div><h3>📚 Historial de caja</h3><p>Cada fila representa una sesión completa: desde apertura hasta cierre</p></div><span class="ux-history-count">${hist.length} sesión${hist.length===1?'':'es'}</span></div><div class="table-wrap ux-cash-history"><table><thead><tr><th>Apertura</th><th>Usuario</th><th>Monto inicial</th><th>Ventas</th><th>Efectivo ventas</th><th>Yape / Plin</th><th>Tarjeta</th><th>Estado / cierre</th><th>Diferencia</th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div></div>
-      </div>`;
+        <div class="card ux-cash-action">
+          <div class="ux-section-head"><div><h3>💵 Control de efectivo</h3><p>El monto inicial se mantiene separado de las ventas.</p></div></div>
+          <div class="ux-money-row"><span>🏁 Monto inicial</span><strong>${Utils.formatMoney(montoInicial)}</strong></div>
+          <div class="ux-money-row"><span>➕ Ventas en efectivo</span><strong>${Utils.formatMoney(stats.pay.Efectivo)}</strong></div>
+          <div class="ux-money-row"><span>➕ Ingresos adicionales</span><strong>${Utils.formatMoney(stats.ingresos)}</strong></div>
+          <div class="ux-money-row"><span>➖ Retiros de caja</span><strong>${Utils.formatMoney(stats.retiros)}</strong></div>
+          <div class="ux-money-row"><span>➖ Gastos pagados en efectivo</span><strong>${Utils.formatMoney(stats.gastosEfectivo)}</strong></div>
+          <div class="ux-money-row ux-money-total"><span>EFECTIVO ESPERADO</span><strong>${Utils.formatMoney(stats.expected)}</strong></div>
+          <div class="ux-cash-move-actions">
+            <button class="btn btn-secondary" onclick="Pages.openCashMovementForm('Ingreso')">➕ Ingreso de efectivo</button>
+            <button class="btn btn-secondary" onclick="Pages.openCashMovementForm('Retiro')">➖ Retiro de efectivo</button>
+          </div>
+          <hr style="border-color:var(--border);margin:1.25rem 0">
+          <h3>🔒 Finalizar jornada</h3>
+          <p class="ux-help ux-help-prominent">Hazlo solo cuando termine realmente la atención del bar. No necesitas cerrar a medianoche.</p>
+          <label class="form-label">Efectivo real contado al cierre</label>
+          <input id="cash-real" class="form-control" type="number" min="0" step="0.01" value="${Math.max(0,stats.expected).toFixed(2)}">
+          <p class="ux-help">El sistema comparará lo contado contra el monto inicial + ventas en efectivo + ingresos − retiros − gastos pagados en efectivo.</p>
+          <button id="btn-close-cash" class="btn btn-danger btn-full" onclick="Pages.closeCash()">Finalizar jornada y cerrar caja</button>
+        </div>
+        <div class="card ux-cash-action">
+          <div class="ux-section-head"><div><h3>🧾 Actividad de caja</h3><p>Ingresos y retiros de efectivo de esta jornada.</p></div></div>
+          ${stats.cashMovements.length?`<div class="ux-cash-movement-list">${[...stats.cashMovements].sort((a,b)=>(`${b.fecha}${b.hora}`).localeCompare(`${a.fecha}${a.hora}`)).map(m=>`<div class="ux-cash-movement"><span>${m.tipo==='Ingreso'?'➕':'➖'} ${Utils.escapeHtml(m.concepto)}</span><strong class="${m.tipo==='Ingreso'?'positive':'negative'}">${m.tipo==='Ingreso'?'+':'-'}${Utils.formatMoney(m.monto)}</strong><small>${Utils.formatDate(m.fecha)} ${Utils.formatTime(m.hora)}</small></div>`).join('')}</div>`:Components.empty('💵','Todavía no hay ingresos ni retiros adicionales')}
+        </div>
+      </div>
+    `:`
+      <div class="card ux-cash-action ux-open-journey-card">
+        <h3>▶️ Abrir nueva jornada</h3>
+        <p class="ux-help ux-help-prominent">La jornada agrupará ventas, gastos, movimientos de inventario y caja desde la apertura hasta el cierre, aunque cruce medianoche.</p>
+        <label class="form-label">Monto inicial en efectivo</label>
+        <input id="cash-initial" class="form-control" type="number" min="0" step="0.01" value="0">
+        <p class="ux-help">Este dinero es solo el fondo de apertura y <strong>no suma como venta</strong>.</p>
+        <button id="btn-open-cash" class="btn btn-primary btn-full" onclick="Pages.openCash()">Abrir jornada y comenzar</button>
+      </div>
+    `}
+
+    <div class="card ux-cash-history-card">
+      <div class="ux-section-head ux-cash-history-head"><div><h3>📚 Jornadas recientes</h3><p>Cada fila representa un turno completo del bar.</p></div><span class="ux-history-count">${history.length} registro${history.length===1?'':'s'}</span></div>
+      <div class="table-wrap ux-cash-history"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Responsable</th><th>Ventas</th><th>Gastos</th><th>Duración</th><th>Estado / cierre</th><th>Diferencia</th><th></th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div>
+    </div>`;
   },
-  openCash(){const v=Number(document.getElementById('cash-initial')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');confirmAction(`Abrir caja con ${Utils.formatMoney(v)} de efectivo inicial. Permanecerá abierta hasta que la cierres manualmente. ¿Confirmar?`,async()=>{const r=await Store.openCash(v);Toast.show(r.ok?'Caja abierta. Puedes vender aunque pase medianoche.':r.error,r.ok?'success':'error');if(r.ok){SetupGuide.mark('cashOpened');Modal.close();Router.go('caja')}return r;},{title:'Confirmar apertura de caja',confirmText:'Abrir caja',danger:false,key:'open-cash'});},
-  closeCash(){const v=Number(document.getElementById('cash-real')?.value);if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');confirmAction(`Cerrar la caja declarando ${Utils.formatMoney(v)} de efectivo contado. Se incluirán todas las ventas realizadas desde la apertura, incluso las del día siguiente.`,async()=>{const r=await Store.closeCash(v);Toast.show(r.ok?`Caja cerrada. Diferencia: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('caja')}return r;},{title:'Finalizar turno y cerrar caja',confirmText:'Cerrar caja',danger:true,key:'close-cash'});},
+
+  openCash(){
+    const v=Number(document.getElementById('cash-initial')?.value);
+    if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un monto inicial válido','error');
+    confirmAction(`Abrir una nueva jornada con ${Utils.formatMoney(v)} de efectivo inicial. Permanecerá abierta hasta que la finalices manualmente. ¿Confirmar?`,async()=>{
+      const r=await Store.openCash(v);
+      Toast.show(r.ok?`${r.numero||'Jornada'} abierta. Puedes vender aunque pase medianoche.`:r.error,r.ok?'success':'error');
+      if(r.ok){SetupGuide.mark('cashOpened');Modal.close();Router.go('caja')}
+      return r;
+    },{title:'Abrir jornada',confirmText:'Abrir jornada',danger:false,key:'open-cash'});
+  },
+
+  closeCash(){
+    const v=Number(document.getElementById('cash-real')?.value);
+    if(!Number.isFinite(v)||v<0)return Toast.show('Ingresa un efectivo real válido','error');
+    confirmAction(`Finalizar la jornada declarando ${Utils.formatMoney(v)} de efectivo contado. Se incluirá toda la actividad desde la apertura, incluso si pasó al día siguiente.`,async()=>{
+      const r=await Store.closeCash(v);
+      Toast.show(r.ok?`Jornada finalizada. Diferencia de efectivo: ${Utils.formatMoney(r.diferencia)}`:r.error,r.ok?'success':'error');
+      if(r.ok){Modal.close();Router.go('jornadas')}
+      return r;
+    },{title:'Finalizar jornada y cerrar caja',confirmText:'Finalizar jornada',danger:true,key:'close-cash'});
+  },
+
+  openCashMovementForm(tipo='Ingreso'){
+    if(!Store.getOpenJourney())return Toast.show('Primero abre una jornada','error');
+    if(!['Ingreso','Retiro'].includes(tipo))return;
+    Modal.open(`
+      <div class="modal-header"><h2>${tipo==='Ingreso'?'➕ Ingreso de efectivo':'➖ Retiro de efectivo'}</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
+      <div class="modal-body">
+        <p class="ux-help">${tipo==='Ingreso'?'Úsalo para sencillo u otro dinero que entra a la caja sin ser una venta.':'Úsalo cuando retires dinero físico de la caja durante la jornada.'}</p>
+        <div class="form-group"><label>Motivo *</label><input id="cash-move-concept" type="text" maxlength="160" placeholder="${tipo==='Ingreso'?'Ej. Sencillo adicional':'Ej. Retiro para resguardo'}"></div>
+        <div class="form-group"><label>Monto (S/) *</label><input id="cash-move-amount" type="number" min="0.01" step="0.01" placeholder="0.00"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn ${tipo==='Ingreso'?'btn-primary':'btn-danger'}" onclick="Pages.saveCashMovement('${tipo}')">Registrar ${tipo.toLowerCase()}</button></div>
+    `);
+  },
+
+  async saveCashMovement(tipo){
+    const concepto=(document.getElementById('cash-move-concept')?.value||'').trim();
+    const monto=Number(document.getElementById('cash-move-amount')?.value);
+    if(!concepto||!Number.isFinite(monto)||monto<=0)return Toast.show('Completa motivo y monto válido','error');
+    return confirmAction(`${tipo==='Ingreso'?'Ingresar':'Retirar'} ${Utils.formatMoney(monto)}. Motivo: ${concepto}. ¿Confirmar?`,async()=>{
+      const r=await Store.addCashMovement({tipo,monto,concepto});
+      Toast.show(r.ok?`${tipo} registrado`:r.error,r.ok?'success':'error');
+      if(r.ok){Modal.close();Router.go('caja')}
+      return r;
+    },{title:`Confirmar ${tipo.toLowerCase()}`,confirmText:'Confirmar',danger:tipo==='Retiro',key:'cash-move'});
+  },
+
+  jornadas() {
+    const u=Auth.currentUser();
+    const list=[...Store.state.jornadas]
+      .filter(j=>Auth.isAdmin()||j.usuarioId===u.id)
+      .sort((a,b)=>(`${b.fechaApertura||b.fecha||''}${b.horaApertura||b.hora||''}`).localeCompare(`${a.fechaApertura||a.fecha||''}${a.horaApertura||a.hora||''}`));
+    const open=list.filter(j=>j.estado==='Abierta');
+    const closed=list.filter(j=>j.estado==='Cerrada');
+    const totalClosed=closed.reduce((a,j)=>a+Number(j.totalVentas||0),0);
+    return `<div class="page-header"><div><h1 class="page-title">🌙 ${Auth.isAdmin()?'Jornadas':'Mis jornadas'}</h1><p class="ux-page-sub">Consulta cada turno completo, aunque haya empezado un día y terminado al siguiente.</p></div><button class="btn btn-primary" onclick="Router.go('caja')">${open.some(j=>j.usuarioId===u.id)?'Ver jornada actual':'Abrir jornada'}</button></div>
+      <div class="stat-cards" style="margin-bottom:1.25rem">
+        <div class="stat-card"><div class="stat-label">🟢 Jornadas abiertas</div><div class="stat-value">${open.length}</div><div class="stat-sub">activas actualmente</div></div>
+        <div class="stat-card"><div class="stat-label">✅ Jornadas cerradas</div><div class="stat-value">${closed.length}</div><div class="stat-sub">en el historial cargado</div></div>
+        <div class="stat-card"><div class="stat-label">💰 Ventas de jornadas cerradas</div><div class="stat-value amber">${Utils.formatMoney(totalClosed)}</div><div class="stat-sub">según los resúmenes guardados</div></div>
+      </div>
+      <div class="toolbar ux-filter-grid">
+        <input type="search" id="journey-search" class="search-input" placeholder="🔎 Buscar jornada o responsable..." oninput="Pages.filterJornadas()">
+        <select id="journey-status" class="filter-select" onchange="Pages.filterJornadas()"><option value="">Todos los estados</option><option value="Abierta">Abiertas</option><option value="Cerrada">Cerradas</option></select>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Cierre</th><th>Responsable</th><th>Duración</th><th>Ventas</th><th>Gastos</th><th>Estado</th><th></th></tr></thead><tbody id="journey-tbody">${this._journeyRows(list)}</tbody></table></div>`;
+  },
+
+  _journeyRows(list){
+    if(!list.length)return `<tr><td colspan="9">${Components.empty('🌙','No hay jornadas para mostrar')}</td></tr>`;
+    return list.map(j=>{
+      const st=this._journeyStats(j);
+      return `<tr>
+        <td data-label="Jornada"><strong>${Utils.escapeHtml(j.numero||Store.journeyNumber(j.id))}</strong></td>
+        <td data-label="Apertura">${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}</td>
+        <td data-label="Cierre">${j.estado==='Cerrada'?`${Utils.formatDate(j.fechaCierre)} ${Utils.formatTime(j.horaCierre||'')}`:'—'}</td>
+        <td data-label="Responsable">${Utils.escapeHtml(j.usuarioNombre||Store.getUser(j.usuarioId)?.nombres||'—')}</td>
+        <td data-label="Duración">${this._durationLabel(st.duration)}</td>
+        <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(st.totalSales)}</strong></td>
+        <td data-label="Gastos">${Utils.formatMoney(st.totalExpenses)}</td>
+        <td data-label="Estado">${j.estado==='Abierta'?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>'}</td>
+        <td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.viewJornada('${j.id}')">👁️ Ver detalle</button></td>
+      </tr>`;
+    }).join('');
+  },
+
+  filterJornadas(){
+    const q=(document.getElementById('journey-search')?.value||'').trim().toLowerCase();
+    const status=document.getElementById('journey-status')?.value||'';
+    const u=Auth.currentUser();
+    const list=[...Store.state.jornadas].filter(j=>{
+      if(!Auth.isAdmin()&&j.usuarioId!==u.id)return false;
+      const text=`${j.numero||Store.journeyNumber(j.id)} ${j.usuarioNombre||''} ${j.fechaApertura||j.fecha||''}`.toLowerCase();
+      return (!status||j.estado===status)&&(!q||text.includes(q));
+    }).sort((a,b)=>(`${b.fechaApertura||b.fecha||''}${b.horaApertura||b.hora||''}`).localeCompare(`${a.fechaApertura||a.fecha||''}${a.horaApertura||a.hora||''}`));
+    const tbody=document.getElementById('journey-tbody');
+    if(tbody){tbody.innerHTML=this._journeyRows(list);try{App.makeTablesMobileFriendly(tbody.closest('.table-wrap')||document)}catch(_){}this._paginateRows('jornadas','journey-tbody',1);}
+  },
+
+  async viewJornada(id){
+    const j=Store.state.jornadas.find(x=>x.id===id);if(!j)return Toast.show('Jornada no encontrada','error');
+    if(Store.loadJourneyDetail){
+      const r=await Store.loadJourneyDetail(id);
+      if(r&&!r.ok)console.warn('Detalle de jornada incompleto:',r.error);
+    }
+    const st=this._journeyStats(j);
+    const diff=j.estado==='Cerrada'?Number(j.diferencia||0):null;
+    const names=(Array.isArray(j.empleadoNombres)&&j.empleadoNombres.length?j.empleadoNombres:[j.usuarioNombre]).filter(Boolean);
+    Modal.open(`
+      <div class="modal-header"><h2>🌙 ${Utils.escapeHtml(j.numero||Store.journeyNumber(j.id))}</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
+      <div class="modal-body">
+        <div class="detail-row"><span class="dr-label">Estado</span><span class="dr-value">${j.estado==='Abierta'?'🟢 ABIERTA':'✅ CERRADA'}</span></div>
+        <div class="detail-row"><span class="dr-label">Apertura</span><span class="dr-value">${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}</span></div>
+        <div class="detail-row"><span class="dr-label">Cierre</span><span class="dr-value">${j.estado==='Cerrada'?`${Utils.formatDate(j.fechaCierre)} ${Utils.formatTime(j.horaCierre||'')}`:'Todavía abierta'}</span></div>
+        <div class="detail-row"><span class="dr-label">Duración</span><span class="dr-value">${this._durationLabel(st.duration)}</span></div>
+        <div class="detail-row"><span class="dr-label">Responsable / empleados</span><span class="dr-value">${Utils.escapeHtml(names.join(', ')||'—')}</span></div>
+        <hr style="border-color:var(--border)">
+        <div class="detail-row"><span class="dr-label">Ventas</span><span class="dr-value">${Utils.formatMoney(st.totalSales)}</span></div>
+        <div class="detail-row"><span class="dr-label">Efectivo</span><span class="dr-value">${Utils.formatMoney(st.pay.Efectivo)}</span></div>
+        <div class="detail-row"><span class="dr-label">Yape / Plin</span><span class="dr-value">${Utils.formatMoney(st.pay.Yape+st.pay.Plin)}</span></div>
+        <div class="detail-row"><span class="dr-label">Tarjeta</span><span class="dr-value">${Utils.formatMoney(st.pay.Tarjeta)}</span></div>
+        <div class="detail-row"><span class="dr-label">Gastos</span><span class="dr-value">${Utils.formatMoney(st.totalExpenses)}</span></div>
+        <hr style="border-color:var(--border)">
+        <div class="detail-row"><span class="dr-label">Monto inicial</span><span class="dr-value">${Utils.formatMoney(j.montoInicial||0)}</span></div>
+        <div class="detail-row"><span class="dr-label">Ingresos de efectivo</span><span class="dr-value">${Utils.formatMoney(st.ingresos)}</span></div>
+        <div class="detail-row"><span class="dr-label">Retiros de efectivo</span><span class="dr-value">${Utils.formatMoney(st.retiros)}</span></div>
+        <div class="detail-row"><span class="dr-label">Gastos en efectivo</span><span class="dr-value">${Utils.formatMoney(st.gastosEfectivo)}</span></div>
+        <div class="detail-row"><span class="dr-label">Efectivo esperado</span><span class="dr-value"><strong>${Utils.formatMoney(st.expected)}</strong></span></div>
+        ${j.estado==='Cerrada'?`<div class="detail-row"><span class="dr-label">Efectivo contado</span><span class="dr-value">${Utils.formatMoney(j.efectivoReal||0)}</span></div><div class="detail-row"><span class="dr-label">Diferencia</span><span class="dr-value"><strong>${diff>0?'+':''}${Utils.formatMoney(diff)}</strong></span></div>`:''}
+      </div>
+      <div class="modal-footer">${j.estado==='Abierta'&&j.usuarioId===Auth.currentUser()?.id?'<button class="btn btn-primary" onclick="Modal.close();Router.go(\'caja\')">Ir a la jornada actual</button>':''}<button class="btn btn-secondary" onclick="Modal.close()">Cerrar</button></div>
+    `);
+  },
+
   reportes(){
     if(!Auth.requireAdmin())return '';
     const desde=Store.daysAgo(30),sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),exp=Store.state.expenses.filter(e=>e.fecha>=desde),gastos=exp.reduce((a,b)=>a+Number(b.monto||0),0),util=ventas-costo-gastos,pay=Store.paymentTotals(sales);
@@ -1451,12 +1654,12 @@ const Pages = {
         ${step(2,'🏷️','Configurar inventario','Registra bebidas, comidas y demás productos con sus precios.',setup.hasProduct,setup.hasCategory,'productos')}
         ${step(3,'📦','Cargar stock','Deja al menos un producto activo con stock mayor a cero.',setup.hasStock,setup.hasProduct,'movimientos')}
         ${step(4,'👥','Crear empleados','Puedes crear las cuentas de tus trabajadores ahora o hacerlo después.',setup.hasEmployee,setup.hasProduct,'empleados',true)}
-        ${step(5,'💰','Abrir la primera caja','Abre una caja para comprobar que el flujo de ventas está listo.',setup.cashOpened,setup.hasStock,'caja')}
+        ${step(5,'🌙','Abrir la primera jornada','Abre una jornada y registra el monto inicial de caja para comprobar que el flujo de ventas está listo.',setup.cashOpened,setup.hasStock,'caja')}
         ${step(6,'🛒','Venta de prueba','Realiza una venta de prueba. Si no deseas generar una venta, puedes omitir este paso.',setup.saleDone || setup.saleSkipped,setup.cashOpened,'ventas')}
       </div>
       ${setup.cashOpened && !setup.saleDone && !setup.saleSkipped ? '<div class="setup-inline-actions"><button class="btn btn-secondary" onclick="Pages.skipSetupSale()">Omitir venta de prueba</button></div>' : ''}
       <div class="setup-finish">
-        <div><strong>${setup.canFinish ? 'Todo listo para empezar' : 'Completa los pasos obligatorios'}</strong><p>${setup.canFinish ? 'Finaliza el tutorial para habilitar todos los apartados sin restricciones.' : 'Categoría, producto, stock, caja y venta de prueba (o su omisión) son necesarios.'}</p></div>
+        <div><strong>${setup.canFinish ? 'Todo listo para empezar' : 'Completa los pasos obligatorios'}</strong><p>${setup.canFinish ? 'Finaliza el tutorial para habilitar todos los apartados sin restricciones.' : 'Categoría, producto, stock, jornada y venta de prueba (o su omisión) son necesarios.'}</p></div>
         <button class="btn btn-primary" ${setup.canFinish ? '' : 'disabled'} onclick="Pages.finishSetup()">Finalizar configuración</button>
       </div>` : `
       <div class="setup-complete"><div class="setup-complete-icon">✅</div><div><strong>Asistente de inicio desactivado</strong><p>Todos los apartados están habilitados. Puedes volver a activar la guía cuando quieras.</p></div><button class="btn btn-secondary" onclick="Pages.restartSetup()">Mostrar tutorial</button></div>`;

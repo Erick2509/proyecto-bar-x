@@ -39,6 +39,9 @@ service cloud.firestore {
     function validTime(v) { return v is string && v.matches('^[0-9]{2}:[0-9]{2}:[0-9]{2}$'); }
     function shortText(v, maxLen) { return v is string && v.size() <= maxLen; }
     function validStatus(v) { return v in ['Activo','Inactivo']; }
+    function cashPath(id) { return /databases/$(database)/documents/cashSessions/$(id); }
+    function journeyPath(id) { return /databases/$(database)/documents/jornadas/$(id); }
+    function lockPath(uid) { return /databases/$(database)/documents/cashLocks/$(uid); }
 
     match /users/{uid} {
       allow read: if admin() || (active() && uid == request.auth.uid);
@@ -54,9 +57,9 @@ service cloud.firestore {
         && shortText(request.resource.data.dni, 30)
         && shortText(request.resource.data.telefono, 40)
         && validStatus(request.resource.data.estado);
-      // v32: el administrador puede borrar perfiles de empleados durante el reinicio, nunca el suyo.
       allow delete: if admin() && uid != request.auth.uid;
     }
+
     match /categories/{id} {
       allow read: if active();
       allow create, update: if admin()
@@ -67,11 +70,9 @@ service cloud.firestore {
       allow delete: if admin();
     }
     match /deletedCategories/{id} {
-      // Archivo técnico: la categoría desaparece del catálogo, pero queda una copia
-      // para conservar trazabilidad de eliminaciones administrativas.
-      allow read, create, update: if admin();
-      allow delete: if admin();
+      allow read, create, update, delete: if admin();
     }
+
     match /products/{id} {
       allow read: if active();
       allow create: if admin()
@@ -87,8 +88,6 @@ service cloud.firestore {
         && shortText(request.resource.data.descripcion, 1000)
         && shortText(request.resource.data.imagen, 80)
         && validStatus(request.resource.data.estado);
-      // Admin administra catálogo. Empleado solo puede reducir stock; nunca aumentarlo
-      // ni modificar precios/nombre/categoría desde el cliente.
       allow update: if admin() || (active()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
         && nonNegativeInt(request.resource.data.stock)
@@ -96,15 +95,56 @@ service cloud.firestore {
       allow delete: if admin();
     }
     match /deletedProducts/{id} {
-      // Los productos eliminados salen de /products y no vuelven a ventas/inventario.
-      // El archivo permite mantener integridad si después se anula una venta histórica.
-      allow read, create, update: if admin();
+      allow read, create, update, delete: if admin();
+    }
+
+    // Una jornada representa un turno operativo y puede cruzar medianoche.
+    match /jornadas/{id} {
+      allow read: if admin() || (active() && resource.data.usuarioId == request.auth.uid);
+      allow create: if active()
+        && request.resource.data.usuarioId == request.auth.uid
+        && request.resource.data.cajaId == id
+        && request.resource.data.numero is string
+        && request.resource.data.numero.matches('^JOR-[A-Z0-9]{1,12}$')
+        && validDate(request.resource.data.fechaApertura)
+        && validTime(request.resource.data.horaApertura)
+        && shortText(request.resource.data.usuarioNombre, 220)
+        && request.resource.data.estado == 'Abierta'
+        && positiveNumber(request.resource.data.montoInicial)
+        && request.resource.data.createdAt is timestamp
+        && (
+          (exists(cashPath(id)) && get(cashPath(id)).data.usuarioId == request.auth.uid && get(cashPath(id)).data.estado == 'Abierta')
+          ||
+          (getAfter(cashPath(id)).data.usuarioId == request.auth.uid && getAfter(cashPath(id)).data.estado == 'Abierta')
+        );
+      allow update: if (
+        ((admin() || (active() && resource.data.usuarioId == request.auth.uid))
+          && resource.data.estado == 'Abierta'
+          && request.resource.data.estado == 'Cerrada'
+          && request.resource.data.usuarioId == resource.data.usuarioId
+          && request.resource.data.cajaId == resource.data.cajaId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'estado','fechaCierre','horaCierre','duracionMinutos','totalVentas','cantidadVentas','totalGastos',
+            'efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','ingresosEfectivo','retirosEfectivo','gastosEfectivo',
+            'efectivoEsperado','efectivoReal','diferencia','empleadoIds','empleadoNombres','closedAt'
+          ]))
+        ||
+        (admin()
+          && resource.data.estado == 'Cerrada'
+          && request.resource.data.estado == 'Cerrada'
+          && request.resource.data.usuarioId == resource.data.usuarioId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'totalVentas','cantidadVentas','totalGastos','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','gastosEfectivo','efectivoEsperado','diferencia',
+            'ajustePorAnulacion','ultimaAnulacionId','ultimaAnulacionFecha','ultimaAnulacionHora','ajustePorGasto','ultimoGastoAjustadoId'
+          ]))
+      );
       allow delete: if admin();
     }
+
     match /sales/{id} {
       allow read: if admin() || (active() && resource.data.empleadoId == request.auth.uid);
       allow create: if active()
-        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','items','total','costoTotal','metodoPago','pagos','estado','createdAt'])
+        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','jornadaId','items','total','costoTotal','metodoPago','pagos','estado','createdAt'])
         && request.resource.data.empleadoId == request.auth.uid
         && request.resource.data.numero is string
         && request.resource.data.numero.matches('^V-[A-Z0-9]{6}$')
@@ -112,15 +152,17 @@ service cloud.firestore {
         && validTime(request.resource.data.hora)
         && shortText(request.resource.data.empleadoNombre, 220)
         && request.resource.data.empleadoNombre.size() > 0
-        && shortText(request.resource.data.cajaId, 120)
-        && request.resource.data.cajaId.size() > 0
-        && exists(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId))
-        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
-        && get(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.estado == 'Abierta'
-        // La caja puede atravesar medianoche. La venta conserva su fecha real,
-        // pero sigue vinculada a la misma sesión abierta por cajaId.
-        && exists(/databases/$(database)/documents/cashLocks/$(request.auth.uid))
-        && get(/databases/$(database)/documents/cashLocks/$(request.auth.uid)).data.cajaId == request.resource.data.cajaId
+        && request.resource.data.cajaId is string
+        && request.resource.data.jornadaId is string
+        && request.resource.data.cajaId == request.resource.data.jornadaId
+        && exists(cashPath(request.resource.data.cajaId))
+        && get(cashPath(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
+        && get(cashPath(request.resource.data.cajaId)).data.estado == 'Abierta'
+        && exists(journeyPath(request.resource.data.jornadaId))
+        && get(journeyPath(request.resource.data.jornadaId)).data.usuarioId == request.auth.uid
+        && get(journeyPath(request.resource.data.jornadaId)).data.estado == 'Abierta'
+        && exists(lockPath(request.auth.uid))
+        && get(lockPath(request.auth.uid)).data.cajaId == request.resource.data.cajaId
         && request.resource.data.estado == 'Completada'
         && validSalePayments(request.resource.data)
         && strictPositive(request.resource.data.total)
@@ -132,6 +174,7 @@ service cloud.firestore {
       allow update: if admin();
       allow delete: if admin();
     }
+
     match /movements/{id} {
       allow read: if admin();
       allow create: if admin() || (active()
@@ -139,6 +182,10 @@ service cloud.firestore {
         && request.resource.data.tipo == 'Venta'
         && validDate(request.resource.data.fecha)
         && validTime(request.resource.data.hora)
+        && request.resource.data.jornadaId is string
+        && request.resource.data.cajaId == request.resource.data.jornadaId
+        && get(journeyPath(request.resource.data.jornadaId)).data.usuarioId == request.auth.uid
+        && get(journeyPath(request.resource.data.jornadaId)).data.estado == 'Abierta'
         && shortText(request.resource.data.productoId, 120)
         && request.resource.data.productoId.size() > 0
         && shortText(request.resource.data.productoNombre, 160)
@@ -151,71 +198,116 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if admin();
     }
+
+    // Los gastos manuales y automáticos siguen siendo administrados por el administrador.
     match /expenses/{id} {
-      allow read, create, update, delete: if admin();
+      allow read: if admin() || (active() && resource.data.jornadaId is string && exists(journeyPath(resource.data.jornadaId)) && get(journeyPath(resource.data.jornadaId)).data.usuarioId == request.auth.uid);
+      allow create, update, delete: if admin();
     }
+    match /deletedExpenses/{id} {
+      allow read, create: if admin();
+      allow update, delete: if false;
+    }
+    match /expenseRevisions/{id} {
+      allow read, create: if admin();
+      allow update, delete: if false;
+    }
+
+    // Ingresos/retiros físicos durante una jornada. No son ventas.
+    match /cashMovements/{id} {
+      allow read: if admin() || (active() && resource.data.usuarioId == request.auth.uid);
+      allow create: if active()
+        && request.resource.data.usuarioId == request.auth.uid
+        && request.resource.data.tipo in ['Ingreso','Retiro']
+        && strictPositive(request.resource.data.monto)
+        && shortText(request.resource.data.concepto, 160)
+        && request.resource.data.concepto.size() > 0
+        && validDate(request.resource.data.fecha)
+        && validTime(request.resource.data.hora)
+        && request.resource.data.jornadaId is string
+        && request.resource.data.cajaId == request.resource.data.jornadaId
+        && exists(journeyPath(request.resource.data.jornadaId))
+        && get(journeyPath(request.resource.data.jornadaId)).data.usuarioId == request.auth.uid
+        && get(journeyPath(request.resource.data.jornadaId)).data.estado == 'Abierta'
+        && exists(cashPath(request.resource.data.cajaId))
+        && get(cashPath(request.resource.data.cajaId)).data.estado == 'Abierta'
+        && request.resource.data.createdAt is timestamp;
+      allow update: if false;
+      allow delete: if admin();
+    }
+
     match /cashLocks/{uid} {
       allow read: if admin() || (active() && uid == request.auth.uid);
       allow create: if active()
         && uid == request.auth.uid
         && request.resource.data.usuarioId == request.auth.uid
         && request.resource.data.cajaId is string
-        && request.resource.data.cajaId.size() > 0
+        && request.resource.data.jornadaId == request.resource.data.cajaId
         && request.resource.data.estado == 'Abierta'
         && validDate(request.resource.data.fecha)
         && validTime(request.resource.data.hora)
-        && getAfter(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
-        && getAfter(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.estado == 'Abierta';
+        && getAfter(cashPath(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
+        && getAfter(cashPath(request.resource.data.cajaId)).data.estado == 'Abierta'
+        && getAfter(journeyPath(request.resource.data.jornadaId)).data.usuarioId == request.auth.uid
+        && getAfter(journeyPath(request.resource.data.jornadaId)).data.estado == 'Abierta';
       allow update: if admin() || (active()
         && uid == request.auth.uid
         && request.resource.data.usuarioId == request.auth.uid
         && request.resource.data.cajaId is string
-        && request.resource.data.cajaId.size() > 0
+        && request.resource.data.jornadaId == request.resource.data.cajaId
         && request.resource.data.estado == 'Abierta'
         && validDate(request.resource.data.fecha)
         && validTime(request.resource.data.hora)
-        && (!exists(/databases/$(database)/documents/cashSessions/$(resource.data.cajaId))
-          || get(/databases/$(database)/documents/cashSessions/$(resource.data.cajaId)).data.estado != 'Abierta')
-        && getAfter(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
-        && getAfter(/databases/$(database)/documents/cashSessions/$(request.resource.data.cajaId)).data.estado == 'Abierta');
+        && (!exists(cashPath(resource.data.cajaId)) || get(cashPath(resource.data.cajaId)).data.estado != 'Abierta')
+        && getAfter(cashPath(request.resource.data.cajaId)).data.usuarioId == request.auth.uid
+        && getAfter(cashPath(request.resource.data.cajaId)).data.estado == 'Abierta'
+        && getAfter(journeyPath(request.resource.data.jornadaId)).data.estado == 'Abierta');
       allow delete: if admin() || (active()
         && uid == request.auth.uid
         && resource.data.usuarioId == request.auth.uid
         && resource.data.cajaId is string
-        && getAfter(/databases/$(database)/documents/cashSessions/$(resource.data.cajaId)).data.estado == 'Cerrada');
+        && getAfter(cashPath(resource.data.cajaId)).data.estado == 'Cerrada');
     }
+
     match /cashSessions/{id} {
       allow read: if admin() || (active() && resource.data.usuarioId == request.auth.uid);
       allow create: if active()
-        && request.resource.data.keys().hasOnly(['fecha','hora','usuarioId','usuarioNombre','montoInicial','estado','createdAt'])
+        && request.resource.data.keys().hasOnly(['fecha','hora','usuarioId','usuarioNombre','montoInicial','jornadaId','estado','createdAt'])
         && request.resource.data.usuarioId == request.auth.uid
+        && request.resource.data.jornadaId == id
         && shortText(request.resource.data.usuarioNombre, 220)
         && validDate(request.resource.data.fecha)
         && validTime(request.resource.data.hora)
         && request.resource.data.estado == 'Abierta'
         && positiveNumber(request.resource.data.montoInicial)
         && request.resource.data.createdAt is timestamp
-        && getAfter(/databases/$(database)/documents/cashLocks/$(request.auth.uid)).data.cajaId == id
-        && getAfter(/databases/$(database)/documents/cashLocks/$(request.auth.uid)).data.estado == 'Abierta';
-      // Nadie puede reutilizar una caja existente para volver a "abrirla".
-      // Admin y propietario solo pueden realizar la transición Abierta -> Cerrada.
+        && getAfter(lockPath(request.auth.uid)).data.cajaId == id
+        && getAfter(lockPath(request.auth.uid)).data.jornadaId == id
+        && getAfter(lockPath(request.auth.uid)).data.estado == 'Abierta'
+        && getAfter(journeyPath(id)).data.usuarioId == request.auth.uid
+        && getAfter(journeyPath(id)).data.estado == 'Abierta';
       allow update: if (
-        // Cierre normal: propietario o admin, Abierta -> Cerrada.
         ((admin() || (active() && resource.data.usuarioId == request.auth.uid))
           && request.resource.data.usuarioId == resource.data.usuarioId
           && resource.data.estado == 'Abierta'
           && request.resource.data.estado == 'Cerrada'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','real','diferencia','closedAt']))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'estado','fechaCierre','horaCierre','totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas',
+            'ingresosEfectivo','retirosEfectivo','gastosEfectivo','esperado','real','diferencia','closedAt'
+          ]))
         ||
-        // Ajuste de una caja cerrada únicamente por Admin al anular una venta.
         (admin()
           && resource.data.estado == 'Cerrada'
           && request.resource.data.estado == 'Cerrada'
           && request.resource.data.usuarioId == resource.data.usuarioId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','esperado','diferencia','ajustePorAnulacion','ultimaAnulacionId','ultimaAnulacionFecha','ultimaAnulacionHora']))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'totalVentasDia','cantidadVentasDia','efectivoVentas','yapeVentas','plinVentas','tarjetaVentas','gastosEfectivo','esperado','diferencia',
+            'ajustePorAnulacion','ultimaAnulacionId','ultimaAnulacionFecha','ultimaAnulacionHora','ajustePorGasto','ultimoGastoAjustadoId'
+          ]))
       );
       allow delete: if admin();
     }
+
     match /audits/{id} {
       allow read: if admin();
       allow create: if active()
@@ -229,6 +321,7 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if admin();
     }
+
     match /{document=**} { allow read, write: if false; }
   }
 }

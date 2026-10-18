@@ -1,4 +1,4 @@
-const CACHE = 'proyecto-x-v34';
+const CACHE = 'proyecto-x-v36';
 const ASSETS = [
   './','./index.html','./styles.css','./app.js','./pages.js','./store.js','./auth.js',
   './utils.js','./components.js','./firebase-config.js','./manifest.webmanifest',

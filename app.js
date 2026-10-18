@@ -65,6 +65,7 @@ const SetupGuide = {
     if (page === 'productos') return s.hasCategory;
     if (['movimientos','empleados'].includes(page)) return s.hasProduct;
     if (page === 'caja') return s.hasStock;
+    if (page === 'jornadas') return true;
     if (page === 'ventas') return s.hasStock && s.cashOpened;
     if (['historial','gastos','reportes'].includes(page)) return s.saleReady;
     return true;
@@ -74,7 +75,7 @@ const SetupGuide = {
     if (page === 'productos' && !s.hasCategory) return 'Primero crea al menos una categoría.';
     if (['movimientos','empleados'].includes(page) && !s.hasProduct) return 'Primero registra al menos un producto en Inventario.';
     if (page === 'caja' && !s.hasStock) return 'Primero agrega stock a por lo menos un producto.';
-    if (page === 'ventas' && !s.cashOpened) return 'Primero abre una caja desde el paso de Caja.';
+    if (page === 'ventas' && !s.cashOpened) return 'Primero abre una jornada desde Jornada y Caja.';
     if (['historial','gastos','reportes'].includes(page) && !s.saleReady) return 'Completa u omite la venta de prueba para habilitar este apartado.';
     return 'Este apartado todavía está bloqueado por el tutorial de inicio.';
   },
@@ -97,6 +98,7 @@ const Router = {
     empleados: () => Pages.empleados(),
     gastos: () => Pages.gastos(),
     caja: () => Pages.caja(),
+    jornadas: () => Pages.jornadas(),
     reportes: () => Pages.reportes(),
     configuracion: () => Pages.configuracion(),
     productosDisponibles: () => Pages.productosDisponibles(),
@@ -176,6 +178,7 @@ const Router = {
 const App = {
   refreshPending: false,
   dayWatchTimer: null,
+  journeyReminderShown: false,
 
   // Utilidad pública usada por las vistas cuando una tabla se vuelve a renderizar.
   // En v33 quedó definida solo en Router; eso provocaba el error
@@ -209,6 +212,25 @@ const App = {
     if (Auth.isLoggedIn() && Router.current) Router.go(Router.current, { preserveScroll: true });
   },
 
+  maybeShowJourneyReminder() {
+    if(this.journeyReminderShown||!Auth.isLoggedIn())return;
+    const u=Auth.currentUser(),j=Store.getOpenJourney?.(u?.id);
+    if(!j)return;
+    const mins=Store.journeyDurationMinutes?.(j)||0;
+    const crossed=(j.fechaApertura||j.fecha)!==Store.today();
+    if(!crossed&&mins<14*60)return;
+    this.journeyReminderShown=true;
+    const label=j.numero||Store.journeyNumber?.(j.id)||'Jornada';
+    Modal.open(`
+      <div class="modal-header"><h2>🌙 Jornada todavía abierta</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
+      <div class="modal-body">
+        <p style="line-height:1.55">La <strong>${Utils.escapeHtml(label)}</strong> sigue abierta desde <strong>${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}</strong>.</p>
+        <p class="ux-help">Si el bar continúa atendiendo, no necesitas hacer nada. La jornada no se cerrará automáticamente. Si la atención ya terminó, revisa el efectivo y finalízala.</p>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Continuar jornada</button><button class="btn btn-primary" onclick="Modal.close();Router.go('caja')">Revisar / finalizar</button></div>
+    `);
+  },
+
   startDayWatch() {
     if (this.dayWatchTimer) clearInterval(this.dayWatchTimer);
     this.dayWatchTimer = setInterval(async () => {
@@ -218,7 +240,7 @@ const App = {
         if (r?.changed) {
           const u=Auth.currentUser();
           const open=Store.state.cashSessions.some(c=>c.usuarioId===u?.id&&c.estado==='Abierta');
-          Toast.show(open?'🌙 Cambió el día. Tu caja sigue abierta y puedes continuar vendiendo.':'📅 Nuevo día detectado. Los indicadores de hoy ya se actualizaron.');
+          Toast.show(open?'🌙 Cambió el día. Tu jornada sigue abierta y puedes continuar vendiendo normalmente.':'📅 Nuevo día detectado. Los indicadores del día ya se actualizaron.');
           this.requestRefresh();
         }
       } catch (e) { console.warn('Cambio de día:', e); }
@@ -238,7 +260,8 @@ const App = {
     if (Auth.isLoggedIn()) {
       this.showApp();
       this.startDayWatch();
-      Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
+      await Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
+      this.maybeShowJourneyReminder();
     } else {
       this.showLogin();
     }
@@ -271,7 +294,9 @@ const App = {
       err.classList.add('hidden');
       this.showApp();
       this.startDayWatch();
-      Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
+      this.journeyReminderShown=false;
+      await Router.go(Auth.isAdmin() ? 'dashboard' : 'inicio');
+      this.maybeShowJourneyReminder();
       Toast.show(`Bienvenido, ${res.user.nombres || res.user.nombre || 'Usuario'}`);
     });
 
@@ -287,6 +312,7 @@ const App = {
     document.getElementById('btn-logout')?.addEventListener('click', async () => {
       this.stopDayWatch();
       await Store.logout();
+      this.journeyReminderShown=false;
       this.showLogin();
       Toast.show('Sesión cerrada');
     });
@@ -339,7 +365,8 @@ const App = {
     const menu = isAdmin ? [
       { page: 'dashboard', icon: '📊', label: 'Dashboard' },
       { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
-      { page: 'caja', icon: '💰', label: 'Caja' },
+      { page: 'caja', icon: '🌙', label: 'Jornada y Caja' },
+      { page: 'jornadas', icon: '📚', label: 'Jornadas' },
       { page: 'productos', icon: '📦', label: 'Inventario' },
       { page: 'categorias', icon: '📂', label: 'Categorías' },
       { page: 'movimientos', icon: '🔄', label: 'Movimientos' },
@@ -353,7 +380,8 @@ const App = {
       { page: 'ventas', icon: '🛒', label: 'Nueva venta' },
       { page: 'historial', icon: '🧾', label: 'Mis ventas' },
       { page: 'productosDisponibles', icon: '📦', label: 'Inventario disponible' },
-      { page: 'caja', icon: '💰', label: 'Mi caja' }
+      { page: 'caja', icon: '🌙', label: 'Mi jornada y caja' },
+      { page: 'jornadas', icon: '📚', label: 'Mis jornadas' }
     ];
 
     const navHtml = menu.map(m => {
@@ -372,14 +400,14 @@ const App = {
       ? [
           { page: 'dashboard', icon: '📊', label: 'Inicio' },
           { page: 'ventas', icon: '🛒', label: 'Vender' },
-          { page: 'caja', icon: '💰', label: 'Caja' },
+          { page: 'caja', icon: '🌙', label: 'Jornada' },
           { page: 'productos', icon: '📦', label: 'Inventario' }
         ]
       : [
           { page: 'inicio', icon: '🏠', label: 'Inicio' },
           { page: 'ventas', icon: '🛒', label: 'Vender' },
           { page: 'historial', icon: '🧾', label: 'Ventas' },
-          { page: 'caja', icon: '💰', label: 'Caja' }
+          { page: 'caja', icon: '🌙', label: 'Jornada' }
         ];
 
     const openMobileMenu = `

@@ -1,6 +1,6 @@
 /* ===== FIREBASE STORE ===== */
 const Store = (() => {
-  const state = { users:[], categories:[], products:[], sales:[], movements:[], expenses:[], cashSessions:[], audits:[], currentUser:null, cart:[] };
+  const state = { users:[], categories:[], products:[], sales:[], movements:[], expenses:[], cashSessions:[], jornadas:[], cashMovements:[], audits:[], currentUser:null, cart:[] };
   const refs = {};
   const mutationLocks = new Set();
   async function guarded(key, fn){ if(mutationLocks.has(key)) return {ok:false,error:'Esta operación ya se está procesando'}; mutationLocks.add(key); try{return await fn();}finally{mutationLocks.delete(key);} }
@@ -50,10 +50,10 @@ const Store = (() => {
       },err=>{ console.error('Firestore '+name+':',err); try{Toast.show('Error cargando '+name+': '+(err.message||err),'error')}catch(_){} resolve(); });
     });
   }
-  async function fetchInto(name,source,{replace=false,cacheKey=null,ttl=300000}={}){
+  async function fetchInto(name,source,{replace=false,cacheKey=null,ttl=300000,predicate=null}={}){
     const key=cacheKey||name; const now=Date.now();
     if(loadedAt[key] && now-loadedAt[key]<ttl) return {ok:true,cached:true};
-    try{ const snap=await source.get(); const docs=normalizeDocs(name,snap); trackUsage('reads',Math.max(1,snap.size),docs); replace?replaceState(name,docs):mergeState(name,docs); loadedAt[key]=now; return{ok:true,count:docs.length}; }
+    try{ const snap=await source.get(); const docs=normalizeDocs(name,snap); trackUsage('reads',Math.max(1,snap.size),docs); replace?replaceState(name,docs):(predicate?(state[name]=state[name].filter(x=>!predicate(x)),mergeState(name,docs)):mergeState(name,docs)); loadedAt[key]=now; return{ok:true,count:docs.length}; }
     catch(e){ console.error('Carga '+name,e); return{ok:false,error:e.message}; }
   }
   function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
@@ -89,6 +89,67 @@ const Store = (() => {
     if(pagos.length===1)return pagos[0].metodo;
     return pagos.map(p=>`${p.metodo} S/${Number(p.monto||0).toFixed(2)}`).join(' + ');
   }
+
+  // ===== JORNADAS v35 =====
+  // Una jornada representa el turno operativo del bar. Puede iniciar un día y terminar
+  // al siguiente sin cortar ventas a medianoche. Por compatibilidad, usamos el mismo
+  // id para la jornada y su caja principal (jornadaId === cajaId).
+  function getOpenJourney(userId=state.currentUser?.id){
+    return state.jornadas.find(j=>j.usuarioId===userId&&j.estado==='Abierta')||null;
+  }
+  function getOpenCash(userId=state.currentUser?.id){
+    return state.cashSessions.find(c=>c.usuarioId===userId&&c.estado==='Abierta')||null;
+  }
+  function journeyIdForCurrent(){
+    const j=getOpenJourney();
+    if(j?.id)return j.id;
+    const c=getOpenCash();
+    return c?.id||null;
+  }
+  function journeyDurationMinutes(j, endParts=null){
+    if(!j)return 0;
+    const fd=String(j.fechaApertura||j.fecha||'').trim();
+    const ht=String(j.horaApertura||j.hora||'00:00:00').trim();
+    const ed=String(endParts?.fecha||j.fechaCierre||limaParts().fecha).trim();
+    const et=String(endParts?.hora||j.horaCierre||limaParts().hora).trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(fd)||!/^\d{2}:\d{2}/.test(ht)||!/^\d{4}-\d{2}-\d{2}$/.test(ed)||!/^\d{2}:\d{2}/.test(et))return 0;
+    const start=Date.parse(`${fd}T${ht.slice(0,8)}-05:00`);
+    const end=Date.parse(`${ed}T${et.slice(0,8)}-05:00`);
+    if(!Number.isFinite(start)||!Number.isFinite(end)||end<start)return 0;
+    return Math.floor((end-start)/60000);
+  }
+  function journeyNumber(id){ return `JOR-${String(id||'').slice(0,6).toUpperCase()}`; }
+
+  async function ensureJourneyForOpenCash(cash){
+    if(!cash?.id||cash.estado!=='Abierta')return null;
+    const existing=state.jornadas.find(j=>j.id===cash.id);
+    if(existing)return existing;
+    try{
+      const ref=db.collection('jornadas').doc(cash.id);
+      const snap=await ref.get(); trackUsage('reads',1);
+      if(snap.exists){
+        const j={id:snap.id,...snap.data()}; mergeState('jornadas',[j]); return j;
+      }
+      const payload={
+        numero:journeyNumber(cash.id),
+        fechaApertura:cash.fecha,
+        horaApertura:cash.hora,
+        usuarioId:cash.usuarioId,
+        usuarioNombre:cash.usuarioNombre||'',
+        cajaId:cash.id,
+        montoInicial:Number(cash.montoInicial||0),
+        estado:'Abierta',
+        migradaDesdeCaja:true,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+      };
+      await ref.set(payload); trackUsage('writes',1);
+      const local={id:cash.id,...payload}; if(!state.jornadas.some(x=>x.id===cash.id))state.jornadas.push(local);
+      return local;
+    }catch(e){
+      console.warn('No se pudo vincular la caja antigua a una jornada:',e);
+      return null;
+    }
+  }
   async function bindDailyListeners(force=false){
     const u=state.currentUser, d=usageDate(); if(!u)return{ok:false,error:'Sesión no válida'};
     if(!force && liveBusinessDate===d && refs.todaySales)return{ok:true,changed:false,date:d};
@@ -113,7 +174,11 @@ const Store = (() => {
       // Una caja abierta no depende de la fecha: puede continuar durante la madrugada o varios días.
       const cashQuery=db.collection('cashSessions').where('usuarioId','==',u.id).where('estado','==','Abierta');
       const cash=listenScoped('openCash','cashSessions',cashQuery,{predicate:x=>x.usuarioId===u.id&&x.estado==='Abierta'});
-      await Promise.all([cats,products,cash]);
+      const journeyQuery=db.collection('jornadas').where('usuarioId','==',u.id).where('estado','==','Abierta');
+      const journey=listenScoped('openJourney','jornadas',journeyQuery,{predicate:x=>x.usuarioId===u.id&&x.estado==='Abierta'});
+      await Promise.all([cats,products,cash,journey]);
+      const legacyOpen=getOpenCash(u.id);
+      if(legacyOpen&&!getOpenJourney(u.id))await ensureJourneyForOpenCash(legacyOpen);
     }
     await bindDailyListeners(!refs.todaySales);
   }
@@ -146,7 +211,7 @@ const Store = (() => {
     cashId=String(cashId||'').trim();
     const u=state.currentUser;if(!u||!cashId)return{ok:false,error:'Caja inválida'};
     let q=db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',cashId);
-    return fetchInto('sales',q,{cacheKey:`cashSales:${cashId}`,ttl:force?0:120000});
+    return fetchInto('sales',q,{cacheKey:`cashSales:${cashId}`,ttl:force?0:120000,predicate:x=>x.empleadoId===u.id&&x.cajaId===cashId});
   }
   async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(30)).orderBy('fecha','desc'),{cacheKey:'expensesHistory',ttl:300000}); }
   async function loadExpensesForRange(desde,hasta){
@@ -165,6 +230,82 @@ const Store = (() => {
     for(let i=0;i<14;i++){const date=daysAgo(i);await fetchInto('cashSessions',db.collection('cashSessions').where('usuarioId','==',u.id).where('fecha','==',date),{cacheKey:'cash:'+date,ttl:300000});}
     loadedAt.cashHistory=Date.now(); return{ok:true};
   }
+  function mergeLegacyCashAsJourneys(){
+    const existing=new Set(state.jornadas.map(j=>j.id));
+    const legacy=state.cashSessions.filter(c=>!existing.has(c.id)).map(c=>({
+      id:c.id,
+      numero:journeyNumber(c.id),
+      fechaApertura:c.fecha,
+      horaApertura:c.hora,
+      fechaCierre:c.fechaCierre||null,
+      horaCierre:c.horaCierre||null,
+      usuarioId:c.usuarioId,
+      usuarioNombre:c.usuarioNombre||'',
+      cajaId:c.id,
+      montoInicial:Number(c.montoInicial||0),
+      estado:c.estado||'Cerrada',
+      totalVentas:c.totalVentasDia==null?null:Number(c.totalVentasDia||0),
+      cantidadVentas:c.cantidadVentasDia==null?null:Number(c.cantidadVentasDia||0),
+      efectivoVentas:c.efectivoVentas==null?null:Number(c.efectivoVentas||0),
+      yapeVentas:c.yapeVentas==null?null:Number(c.yapeVentas||0),
+      plinVentas:c.plinVentas==null?null:Number(c.plinVentas||0),
+      tarjetaVentas:c.tarjetaVentas==null?null:Number(c.tarjetaVentas||0),
+      efectivoEsperado:c.esperado==null?null:Number(c.esperado||0),
+      efectivoReal:c.real==null?null:Number(c.real||0),
+      diferencia:c.diferencia==null?null:Number(c.diferencia||0),
+      totalGastos:0,ingresosEfectivo:Number(c.ingresosEfectivo||0),retirosEfectivo:Number(c.retirosEfectivo||0),gastosEfectivo:Number(c.gastosEfectivo||0),
+      duracionMinutos:null,
+      legacy:true
+    }));
+    mergeState('jornadas',legacy);
+    return legacy.length;
+  }
+  async function loadJourneyHistory(){
+    const u=state.currentUser;if(!u)return{ok:false,error:'Sesión no válida'};
+    if(u.role==='admin'){
+      return fetchInto('jornadas',db.collection('jornadas').where('fechaApertura','>=',daysAgo(60)).orderBy('fechaApertura','desc').limit(120),{cacheKey:'journeyHistory',ttl:180000});
+    }
+    if(loadedAt.journeyHistory && Date.now()-loadedAt.journeyHistory<180000)return{ok:true,cached:true};
+    for(let i=0;i<30;i++){
+      const date=daysAgo(i);
+      await fetchInto('jornadas',db.collection('jornadas').where('usuarioId','==',u.id).where('fechaApertura','==',date),{cacheKey:'journey:'+date,ttl:300000});
+    }
+    loadedAt.journeyHistory=Date.now();return{ok:true};
+  }
+  async function loadExpensesForJourney(jornadaId,{force=false}={}){
+    jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
+    const key='expensesJourney:'+jornadaId;
+    if(force)delete loadedAt[key];
+    return fetchInto('expenses',db.collection('expenses').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
+  }
+  async function loadMovementsForJourney(jornadaId,{force=false}={}){
+    jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
+    const key='movementsJourney:'+jornadaId;
+    if(force)delete loadedAt[key];
+    return fetchInto('movements',db.collection('movements').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000});
+  }
+  async function loadCashMovementsForJourney(jornadaId,{force=false}={}){
+    jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
+    const key='cashMovementsJourney:'+jornadaId;
+    if(force)delete loadedAt[key];
+    return fetchInto('cashMovements',db.collection('cashMovements').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
+  }
+  async function loadJourneyDetail(jornadaId,{force=false}={}){
+    jornadaId=String(jornadaId||'').trim();const u=state.currentUser;
+    if(!u||!jornadaId)return{ok:false,error:'Jornada inválida'};
+    const tasks=[];
+    if(u.role==='admin'){
+      const key='journeySalesAdmin:'+jornadaId;if(force)delete loadedAt[key];
+      tasks.push(fetchInto('sales',db.collection('sales').where('cajaId','==',jornadaId),{cacheKey:key,ttl:force?0:180000}));
+      tasks.push(loadExpensesForJourney(jornadaId,{force}));
+    }else{
+      tasks.push(loadSalesForCash(jornadaId,{force}));
+    }
+    tasks.push(loadCashMovementsForJourney(jornadaId,{force}));
+    const results=await Promise.all(tasks);
+    const bad=results.find(r=>r&&!r.ok);
+    return bad||{ok:true};
+  }
   async function preparePage(page){
     if(!state.currentUser)return;
     await refreshDailyContext();
@@ -172,13 +313,28 @@ const Store = (() => {
     if(page==='empleados')return;
     if(page==='movimientos')await loadMovements();
     if(page==='gastos')await loadExpensesHistory();
-    if(page==='historial')await Promise.all([loadSalesHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
-    if(page==='caja'){
-      await loadCashHistory();
-      const open=state.cashSessions.find(c=>c.usuarioId===state.currentUser.id&&c.estado==='Abierta');
-      if(open)await loadSalesForCash(open.id);
+    if(page==='historial')await Promise.all([loadSalesHistory(),loadJourneyHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
+    if(page==='dashboard'||page==='inicio'){
+      const open=getOpenCash(state.currentUser.id);
+      if(open)await Promise.all([loadSalesForCash(open.id),loadCashMovementsForJourney(open.id),state.currentUser.role==='admin'?loadExpensesForJourney(open.id):Promise.resolve({ok:true})]);
     }
-    if(page==='reportes')await Promise.all([loadSalesHistory(),loadExpensesHistory()]);
+    if(page==='caja'){
+      await Promise.all([loadCashHistory(),loadJourneyHistory()]);
+      mergeLegacyCashAsJourneys();
+      const open=getOpenCash(state.currentUser.id);
+      if(open){
+        await ensureJourneyForOpenCash(open);
+        await Promise.all([loadSalesForCash(open.id),loadCashMovementsForJourney(open.id),state.currentUser.role==='admin'?loadExpensesForJourney(open.id):Promise.resolve({ok:true})]);
+      }
+    }
+    if(page==='jornadas'){
+      await Promise.all([loadJourneyHistory(),loadCashHistory(), state.currentUser.role==='admin'?loadUsers():Promise.resolve()]);
+      mergeLegacyCashAsJourneys();
+      const open=getOpenCash(state.currentUser.id);
+      if(open)await Promise.all([loadSalesForCash(open.id),loadCashMovementsForJourney(open.id),state.currentUser.role==='admin'?Promise.all([loadExpensesForJourney(open.id),loadMovementsForJourney(open.id)]):Promise.resolve({ok:true})]);
+    }
+    if(page==='gastos'||page==='movimientos')await loadJourneyHistory();
+    if(page==='reportes')await Promise.all([loadSalesHistory(),loadExpensesHistory(),loadJourneyHistory()]);
   }
   let profilePromise=null, profileUid=null;
   async function loadProfile(uid){
@@ -191,7 +347,7 @@ const Store = (() => {
   function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; liveBusinessDate=null; validatedCashId=null;}
   async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const profile=await loadProfile(u.uid); if(!profile){await fbAuth.signOut();resolve();return;} state.currentUser=profile; if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
   async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const profile=await loadProfile(c.user.uid);if(!profile||!isActive(profile)){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=profile;await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
-  async function logout(){stop();state.cart=[];state.currentUser=null;await fbAuth.signOut()}
+  async function logout(){stop();state.users=[];state.categories=[];state.products=[];state.sales=[];state.movements=[];state.expenses=[];state.cashSessions=[];state.jornadas=[];state.cashMovements=[];state.audits=[];state.cart=[];state.currentUser=null;await fbAuth.signOut()}
   async function audit(accion,detalle){if(!state.currentUser)return;const t=limaParts();await db.collection('audits').add({...t,accion,detalle,usuarioId:state.currentUser.id,usuarioNombre:`${state.currentUser.nombres||''} ${state.currentUser.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});trackUsage('writes',1)}
   async function safeAudit(accion,detalle){
     try{await audit(accion,detalle);}
@@ -319,12 +475,12 @@ const Store = (() => {
     if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede crear productos'};
     const v=validateProductData(data); if(!v.ok)return v;
     try{
-      const id=docId(),t=limaParts(),p=v.value,stock=p.stock;
+      const id=docId(),t=limaParts(),p=v.value,stock=p.stock,jornadaId=journeyIdForCurrent();
       const b=db.batch();b.set(db.collection('products').doc(id),p);
       if(stock>0){
         const mid=docId();
-        b.set(db.collection('movements').doc(mid),{...t,productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});
-        if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',usuarioId:state.currentUser.id});
+        b.set(db.collection('movements').doc(mid),{...t,...(jornadaId?{jornadaId,cajaId:jornadaId}:{}),productoId:id,productoNombre:p.nombre,tipo:'Entrada',cantidad:stock,stockAnterior:0,stockNuevo:stock,usuarioId:state.currentUser.id,motivo:'Stock inicial'});
+        if(p.precioCompra>0)b.set(db.collection('expenses').doc(),{...t,...(jornadaId?{jornadaId,cajaId:jornadaId}:{}),concepto:`Stock inicial: ${p.nombre}`,categoria:'Stock',monto:+(stock*p.precioCompra).toFixed(2),origen:'Stock inicial',metodoPago:'Otro',usuarioId:state.currentUser.id});
       }
       await b.commit();trackUsage('writes',1+(stock>0?1:0)+(stock>0&&p.precioCompra>0?1:0));
       if(!state.products.some(x=>x.id===id))state.products.push({id,...p});
@@ -349,7 +505,7 @@ const Store = (() => {
         const snap=await tx.get(ref); if(!snap.exists)throw Error('Producto no encontrado');
         const data=snap.data(), stockAlEliminar=Number(data.stock||0);
         tx.set(archive,{...data,originalId:id,categoriaNombre:getCategory(data.categoriaId)?.nombre||'',stockAlEliminar,stockDevueltoPorAnulaciones:0,eliminadoFecha:t.fecha,eliminadoHora:t.hora,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
-        if(stockAlEliminar>0)tx.set(db.collection('movements').doc(),{...t,productoId:id,productoNombre:data.nombre||'',tipo:'Eliminación',cantidad:stockAlEliminar,stockAnterior:stockAlEliminar,stockNuevo:0,usuarioId:state.currentUser.id,motivo:'Producto eliminado del catálogo'});
+        if(stockAlEliminar>0)tx.set(db.collection('movements').doc(),{...t,...(journeyIdForCurrent()?{jornadaId:journeyIdForCurrent(),cajaId:journeyIdForCurrent()}:{}),productoId:id,productoNombre:data.nombre||'',tipo:'Eliminación',cantidad:stockAlEliminar,stockAnterior:stockAlEliminar,stockNuevo:0,usuarioId:state.currentUser.id,motivo:'Producto eliminado del catálogo'});
         tx.delete(ref);
       });
       trackUsage('writes',1+(Number(p.stock||0)>0?1:0));trackUsage('deletes',1);
@@ -367,16 +523,17 @@ const Store = (() => {
     if(!Number.isFinite(cantidad)||cantidad<=0||!Number.isInteger(cantidad))return{ok:false,error:'La cantidad debe ser un entero mayor a 0'};
     if(!Number.isFinite(costoUnitario)||costoUnitario<0)return{ok:false,error:'Costo unitario inválido'};
     const pr=db.collection('products').doc(productoId);
+    const jornadaId=journeyIdForCurrent();
     try{
       await db.runTransaction(async tx=>{
         const s=await tx.get(pr);if(!s.exists)throw Error('Producto no encontrado');
         const p=s.data(),old=Number(p.stock)||0;const negative=['Salida','Merma','Ajuste -'].includes(tipo);const neu=negative?old-cantidad:old+cantidad;
         if(neu<0)throw Error('Stock insuficiente');
-        const t=limaParts(),m={...t,productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:String(motivo||'').trim()};
+        const t=limaParts(),m={...t,...(jornadaId?{jornadaId,cajaId:jornadaId}:{}),productoId,productoNombre:p.nombre,tipo,cantidad,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:String(motivo||'').trim()};
         // El precio de compra maestro del inventario se conserva. Un ingreso de stock puede tener un costo puntual distinto sin sobrescribirlo.
         tx.update(pr,{stock:neu});
         tx.set(db.collection('movements').doc(),m);
-        if(tipo==='Entrada'&&costoUnitario>0)tx.set(db.collection('expenses').doc(),{...t,concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*costoUnitario).toFixed(2),origen:'Compra de stock',usuarioId:state.currentUser.id});
+        if(tipo==='Entrada'&&costoUnitario>0)tx.set(db.collection('expenses').doc(),{...t,...(jornadaId?{jornadaId,cajaId:jornadaId}:{}),concepto:`Compra de stock: ${p.nombre}`,categoria:'Stock',monto:+(cantidad*costoUnitario).toFixed(2),origen:'Compra de stock',metodoPago:'Otro',usuarioId:state.currentUser.id});
       });
       await safeAudit('MOVIMIENTO_STOCK',`${tipo} ${productoId} x${cantidad}`);return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo registrar el movimiento'}}
@@ -414,7 +571,7 @@ const Store = (() => {
           otherCashSnap=await tx.get(db.collection('cashSessions').doc(lockSnap.data().cajaId));
         }
         if(otherCashSnap?.exists && otherCashSnap.data().estado==='Abierta')throw Error('Existe otra caja abierta vinculada a tu usuario');
-        tx.set(lockRef,{usuarioId:u.id,cajaId:caja.id,estado:'Abierta',fecha:caja.fecha||today(),hora:caja.hora||limaParts().hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.set(lockRef,{usuarioId:u.id,cajaId:caja.id,jornadaId:caja.jornadaId||caja.id,estado:'Abierta',fecha:caja.fecha||today(),hora:caja.hora||limaParts().hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
       trackUsage('reads',1);trackUsage('writes',1);validatedCashId=caja.id;return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo validar la caja activa'}}
@@ -442,8 +599,10 @@ const Store = (() => {
       if(!i?.productoId||!Number.isInteger(Number(i.cantidad))||Number(i.cantidad)<=0)return{ok:false,error:'El carrito contiene una cantidad inválida'};
     }
     await refreshDailyContext();
-    const caja=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta');
-    if(!caja)return{ok:false,error:'Debes abrir una caja antes de registrar una venta'};
+    const caja=getOpenCash(u.id);
+    if(!caja)return{ok:false,error:'Debes abrir una jornada antes de registrar una venta'};
+    const jornada=getOpenJourney(u.id)||await ensureJourneyForOpenCash(caja);
+    if(!jornada)return{ok:false,error:'No se pudo validar la jornada activa'};
     const lock=await ensureCashLock(caja);if(!lock.ok)return lock;
     const saleRef=db.collection('sales').doc();
     let savedPayments=[],savedMethod='';
@@ -463,7 +622,7 @@ const Store = (() => {
           total+=sub;costo+=precioCompra*qty;
           tx.update(s.ref,{stock:stock-qty});
           const t=limaParts();
-          tx.set(db.collection('movements').doc(),{...t,productoId:s.id,productoNombre:String(p.nombre||''),tipo:'Venta',cantidad:qty,stockAnterior:stock,stockNuevo:stock-qty,usuarioId:u.id,motivo:`Venta ${saleRef.id}`});
+          tx.set(db.collection('movements').doc(),{...t,jornadaId:jornada.id,cajaId:caja.id,productoId:s.id,productoNombre:String(p.nombre||''),tipo:'Venta',cantidad:qty,stockAnterior:stock,stockNuevo:stock-qty,usuarioId:u.id,motivo:`Venta ${saleRef.id}`});
         }
         total=+total.toFixed(2);costo=+costo.toFixed(2);
         if(!Number.isFinite(total)||total<=0)throw Error('El total de la venta debe ser mayor a S/ 0.00');
@@ -477,9 +636,10 @@ const Store = (() => {
           savedMethod=requestedPayments[0].metodo;
         }
         const t=limaParts();
-        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,items,total,costoTotal:costo,metodoPago:savedMethod,pagos:savedPayments,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,jornadaId:jornada.id,items,total,costoTotal:costo,metodoPago:savedMethod,pagos:savedPayments,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
       trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);
+      delete loadedAt[`cashSales:${caja.id}`];delete loadedAt[`journeySalesAdmin:${jornada.id}`];
       state.cart=[];await safeAudit('VENTA',`${saleRef.id} · ${savedPayments.map(p=>`${p.metodo} S/${p.monto.toFixed(2)}`).join(' + ')}`);
       return{ok:true,sale:{id:saleRef.id,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,metodoPago:savedMethod,pagos:savedPayments}};
     }catch(e){return{ok:false,error:e.message||'No se pudo registrar la venta'}}
@@ -495,8 +655,10 @@ const Store = (() => {
         const sale=ss.data(); if(sale.estado==='Anulada')throw Error('La venta ya está anulada');
         if(sale.estado!=='Completada')throw Error('La venta no se encuentra en un estado que pueda anularse');
 
-        let cashRef=null,cashSnap=null;
+        let cashRef=null,cashSnap=null,journeyRef=null,journeySnap=null;
         if(sale.cajaId){ cashRef=db.collection('cashSessions').doc(sale.cajaId); cashSnap=await tx.get(cashRef); }
+        const journeyId=sale.jornadaId||sale.cajaId||'';
+        if(journeyId){ journeyRef=db.collection('jornadas').doc(journeyId); journeySnap=await tx.get(journeyRef); }
 
         const items=Array.isArray(sale.items)?sale.items:[];
         if(!items.length)throw Error('La venta no contiene productos para devolver');
@@ -520,13 +682,13 @@ const Store = (() => {
           if(x.snap.exists){
             const old=Number(x.snap.data().stock||0),neu=old+x.qty;
             tx.update(x.ref,{stock:neu});
-            tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
+            tx.set(db.collection('movements').doc(),{...t,jornadaId:sale.jornadaId||sale.cajaId||null,cajaId:sale.cajaId||null,productoId:x.item.productoId,productoNombre:x.item.nombre||x.snap.data().nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo}`});
           }else{
             // El producto fue eliminado del catálogo. La devolución se conserva en su archivo
             // para no revivirlo ni perder trazabilidad del stock histórico.
             const archived=x.archiveSnap.data(),old=Number(archived.stockDevueltoPorAnulaciones||0),neu=old+x.qty;
             tx.update(x.archiveRef,{stockDevueltoPorAnulaciones:neu,ultimaDevolucionFecha:t.fecha,ultimaDevolucionHora:t.hora,ultimaVentaAnuladaId:id});
-            tx.set(db.collection('movements').doc(),{...t,productoId:x.item.productoId,productoNombre:x.item.nombre||archived.nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,productoEliminado:true,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo} · producto eliminado del catálogo`});
+            tx.set(db.collection('movements').doc(),{...t,jornadaId:sale.jornadaId||sale.cajaId||null,cajaId:sale.cajaId||null,productoId:x.item.productoId,productoNombre:x.item.nombre||archived.nombre||'',tipo:'Devolución',cantidad:x.qty,stockAnterior:old,stockNuevo:neu,productoEliminado:true,usuarioId:state.currentUser.id,motivo:`Anulación ${id}: ${motivo} · producto eliminado del catálogo`});
           }
         }
 
@@ -554,6 +716,30 @@ const Store = (() => {
           }
           tx.update(cashRef,patch);
         }
+        // Mantener también el resumen de la jornada cerrada consistente.
+        if(journeySnap?.exists && journeySnap.data().estado==='Cerrada'){
+          const j=journeySnap.data(), total=Number(sale.total||0), pagos=getSalePayments(sale);
+          const pagoPorMetodo={Efectivo:0,Yape:0,Plin:0,Tarjeta:0};
+          pagos.forEach(p=>{pagoPorMetodo[p.metodo]+=Number(p.monto||0)});
+          const jpatch={
+            totalVentas:+Math.max(0,Number(j.totalVentas||0)-total).toFixed(2),
+            cantidadVentas:Math.max(0,Number(j.cantidadVentas||0)-1),
+            ajustePorAnulacion:true,
+            ultimaAnulacionId:id,
+            ultimaAnulacionFecha:t.fecha,
+            ultimaAnulacionHora:t.hora
+          };
+          const fields={Efectivo:'efectivoVentas',Yape:'yapeVentas',Plin:'plinVentas',Tarjeta:'tarjetaVentas'};
+          Object.entries(fields).forEach(([metodo,field])=>{
+            const amount=Number(pagoPorMetodo[metodo]||0);
+            if(amount>0)jpatch[field]=+Math.max(0,Number(j[field]||0)-amount).toFixed(2);
+          });
+          if(pagoPorMetodo.Efectivo>0){
+            jpatch.efectivoEsperado=+Math.max(0,Number(j.efectivoEsperado||0)-pagoPorMetodo.Efectivo).toFixed(2);
+            jpatch.diferencia=+(Number(j.efectivoReal||0)-jpatch.efectivoEsperado).toFixed(2);
+          }
+          tx.update(journeyRef,jpatch);
+        }
         tx.update(sr,{estado:'Anulada',motivoAnulacion:motivo,anuladaPor:state.currentUser.id,fechaAnulacion:t.fecha,horaAnulacion:t.hora});
       });
       // Reflejar de inmediato la anulación en memoria, incluso si la venta pertenece
@@ -579,11 +765,15 @@ const Store = (() => {
     if(!Number.isFinite(monto)||monto<=0)return{ok:false,error:'Ingresa un monto válido mayor a S/ 0.00'};
     const permitidas=['Alquiler','Servicios','Personal','Mantenimiento','Otros'];
     if(!permitidas.includes(categoria))return{ok:false,error:'Selecciona una categoría válida'};
+    const metodoPago=String(data?.metodoPago||'Otro').trim();
+    const metodos=['Efectivo','Yape','Plin','Tarjeta','Otro'];
+    if(!metodos.includes(metodoPago))return{ok:false,error:'Selecciona una forma de pago válida'};
     const t=limaParts();
-    const payload={...t,concepto,categoria,monto:+monto.toFixed(2),origen:'Manual',usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    const jornadaId=journeyIdForCurrent();
+    const payload={...t,...(jornadaId?{jornadaId,cajaId:jornadaId}:{}),concepto,categoria,monto:+monto.toFixed(2),metodoPago,origen:'Manual',usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()};
     try{
       const ref=await db.collection('expenses').add(payload);trackUsage('writes',1);
-      if(!state.expenses.some(e=>e.id===ref.id))state.expenses.push({id:ref.id,...payload});
+      if(!state.expenses.some(e=>e.id===ref.id))state.expenses.push({id:ref.id,...payload});if(jornadaId)delete loadedAt['expensesJourney:'+jornadaId];
       try{await safeAudit('REGISTRAR_GASTO',`${concepto} · S/${monto.toFixed(2)}`)}catch(err){console.warn('Auditoría gasto:',err)}
       return{ok:true,id:ref.id};
     }catch(e){
@@ -595,17 +785,47 @@ const Store = (() => {
   async function updateExpense(id,data){
     if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede editar gastos'};
     const e=state.expenses.find(x=>x.id===id);if(!e)return{ok:false,error:'Gasto no encontrado'};
-    if(String(e.origen||'Manual')!=='Manual')return{ok:false,error:'Los gastos automáticos de inventario no se editan para conservar la trazabilidad'};
+
     const concepto=String(data?.concepto??e.concepto??'').trim();
     const categoria=String(data?.categoria??e.categoria??'Otros').trim();
     const monto=Number(data?.monto??e.monto);
-    const permitidas=['Alquiler','Servicios','Personal','Mantenimiento','Otros'];
+    const metodoPago=String(data?.metodoPago??e.metodoPago??'Otro').trim();
+    const permitidas=['Stock','Alquiler','Servicios','Personal','Mantenimiento','Otros'];
+    const metodos=['Efectivo','Yape','Plin','Tarjeta','Otro'];
     if(!concepto)return{ok:false,error:'Ingresa el concepto del gasto'};
     if(!permitidas.includes(categoria))return{ok:false,error:'Selecciona una categoría válida'};
     if(!Number.isFinite(monto)||monto<=0)return{ok:false,error:'Ingresa un monto válido mayor a S/ 0.00'};
-    const patch={concepto,categoria,monto:+monto.toFixed(2)};
+    if(!metodos.includes(metodoPago))return{ok:false,error:'Selecciona una forma de pago válida'};
+    const patch={concepto,categoria,monto:+monto.toFixed(2),metodoPago};
     try{
-      await db.collection('expenses').doc(id).update(patch);Object.assign(e,patch);
+      const expRef=db.collection('expenses').doc(id);
+      const jornadaId=e.jornadaId||e.cajaId||'';
+      if(jornadaId){
+        const journeyRef=db.collection('jornadas').doc(jornadaId),cashRef=db.collection('cashSessions').doc(e.cajaId||jornadaId);
+        await db.runTransaction(async tx=>{
+          const [expSnap,jSnap,cSnap]=await Promise.all([tx.get(expRef),tx.get(journeyRef),tx.get(cashRef)]);
+          if(!expSnap.exists)throw Error('Gasto no encontrado');
+          const old=expSnap.data();
+          tx.set(db.collection('expenseRevisions').doc(),{gastoId:id,accion:'EDITAR',anterior:old,nuevo:patch,usuarioId:state.currentUser.id,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+          tx.update(expRef,patch);
+          if(jSnap.exists&&jSnap.data().estado==='Cerrada'){
+            const j=jSnap.data(),oldCash=String(old.metodoPago||'Otro')==='Efectivo'?Number(old.monto||0):0,newCash=metodoPago==='Efectivo'?Number(patch.monto||0):0;
+            const delta=Number(patch.monto||0)-Number(old.monto||0),deltaCash=newCash-oldCash;
+            const expected=+(Number(j.efectivoEsperado||0)-deltaCash).toFixed(2);
+            tx.update(journeyRef,{totalGastos:+Math.max(0,Number(j.totalGastos||0)+delta).toFixed(2),gastosEfectivo:+Math.max(0,Number(j.gastosEfectivo||0)+deltaCash).toFixed(2),efectivoEsperado:expected,diferencia:+(Number(j.efectivoReal||0)-expected).toFixed(2),ajustePorGasto:true,ultimoGastoAjustadoId:id});
+            if(cSnap.exists&&cSnap.data().estado==='Cerrada'){
+              const c=cSnap.data(),cExpected=+(Number(c.esperado||0)-deltaCash).toFixed(2);
+              tx.update(cashRef,{gastosEfectivo:+Math.max(0,Number(c.gastosEfectivo||0)+deltaCash).toFixed(2),esperado:cExpected,diferencia:+(Number(c.real||0)-cExpected).toFixed(2),ajustePorGasto:true,ultimoGastoAjustadoId:id});
+            }
+          }
+        });
+      }else await db.runTransaction(async tx=>{
+        const snap=await tx.get(expRef);if(!snap.exists)throw Error('Gasto no encontrado');
+        tx.set(db.collection('expenseRevisions').doc(),{gastoId:id,accion:'EDITAR',anterior:snap.data(),nuevo:patch,usuarioId:state.currentUser.id,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.update(expRef,patch);
+      });
+      Object.assign(e,patch);
+      if(jornadaId){delete loadedAt.journeyHistory;delete loadedAt['expensesJourney:'+jornadaId];}
       await safeAudit('EDITAR_GASTO',`${id}: ${concepto} · S/${monto.toFixed(2)}`);
       return{ok:true};
     }catch(err){return{ok:false,error:err.message||'No se pudo editar el gasto'}}
@@ -613,13 +833,55 @@ const Store = (() => {
   async function deleteExpense(id){
     if(!requireAdminStore())return{ok:false,error:'Solo el administrador puede eliminar gastos'};
     const e=state.expenses.find(x=>x.id===id);if(!e)return{ok:false,error:'Gasto no encontrado'};
-    if(String(e.origen||'Manual')!=='Manual')return{ok:false,error:'Los gastos automáticos de inventario no se eliminan para conservar la trazabilidad'};
+
     try{
-      await db.collection('expenses').doc(id).delete();
+      const expRef=db.collection('expenses').doc(id),jornadaId=e.jornadaId||e.cajaId||'';
+      if(jornadaId){
+        const journeyRef=db.collection('jornadas').doc(jornadaId),cashRef=db.collection('cashSessions').doc(e.cajaId||jornadaId);
+        await db.runTransaction(async tx=>{
+          const [expSnap,jSnap,cSnap]=await Promise.all([tx.get(expRef),tx.get(journeyRef),tx.get(cashRef)]);
+          if(!expSnap.exists)throw Error('Gasto no encontrado');
+          const old=expSnap.data();
+          tx.set(db.collection('deletedExpenses').doc(id),{...old,originalId:id,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
+          tx.delete(expRef);
+          if(jSnap.exists&&jSnap.data().estado==='Cerrada'){
+            const j=jSnap.data(),cashAmount=String(old.metodoPago||'Otro')==='Efectivo'?Number(old.monto||0):0;
+            const expected=+(Number(j.efectivoEsperado||0)+cashAmount).toFixed(2);
+            tx.update(journeyRef,{totalGastos:+Math.max(0,Number(j.totalGastos||0)-Number(old.monto||0)).toFixed(2),gastosEfectivo:+Math.max(0,Number(j.gastosEfectivo||0)-cashAmount).toFixed(2),efectivoEsperado:expected,diferencia:+(Number(j.efectivoReal||0)-expected).toFixed(2),ajustePorGasto:true,ultimoGastoAjustadoId:id});
+            if(cSnap.exists&&cSnap.data().estado==='Cerrada'){
+              const c=cSnap.data(),cExpected=+(Number(c.esperado||0)+cashAmount).toFixed(2);
+              tx.update(cashRef,{gastosEfectivo:+Math.max(0,Number(c.gastosEfectivo||0)-cashAmount).toFixed(2),esperado:cExpected,diferencia:+(Number(c.real||0)-cExpected).toFixed(2),ajustePorGasto:true,ultimoGastoAjustadoId:id});
+            }
+          }
+        });
+      }else await db.runTransaction(async tx=>{
+        const snap=await tx.get(expRef);if(!snap.exists)throw Error('Gasto no encontrado');
+        tx.set(db.collection('deletedExpenses').doc(id),{...snap.data(),originalId:id,eliminadoPor:state.currentUser.id,deletedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.delete(expRef);
+      });
       state.expenses=state.expenses.filter(x=>x.id!==id);
+      if(jornadaId){delete loadedAt.journeyHistory;delete loadedAt['expensesJourney:'+jornadaId];}
       await safeAudit('ELIMINAR_GASTO',`${id}: ${e.concepto||''} · S/${Number(e.monto||0).toFixed(2)}`);
       return{ok:true};
     }catch(err){return{ok:false,error:err.message||'No se pudo eliminar el gasto'}}
+  }
+
+  async function addCashMovement({tipo,monto,concepto}){
+    const u=state.currentUser;if(!u||!isActive(u))return{ok:false,error:'Sesión no válida'};
+    tipo=String(tipo||'').trim();monto=Number(monto);concepto=String(concepto||'').trim();
+    if(!['Ingreso','Retiro'].includes(tipo))return{ok:false,error:'Tipo de movimiento de caja inválido'};
+    if(!Number.isFinite(monto)||monto<=0)return{ok:false,error:'Ingresa un monto mayor a S/ 0.00'};
+    if(!concepto)return{ok:false,error:'Indica el motivo del movimiento'};
+    const caja=getOpenCash(u.id),jornada=getOpenJourney(u.id);
+    if(!caja||!jornada)return{ok:false,error:'Debes tener una jornada abierta'};
+    const t=limaParts();
+    const payload={...t,jornadaId:jornada.id,cajaId:caja.id,tipo,monto:+monto.toFixed(2),concepto,usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    try{
+      const ref=await db.collection('cashMovements').add(payload);trackUsage('writes',1);
+      state.cashMovements.push({id:ref.id,...payload});delete loadedAt['cashMovementsJourney:'+jornada.id];
+      await safeAudit(tipo==='Ingreso'?'INGRESO_CAJA':'RETIRO_CAJA',`${concepto} · S/${monto.toFixed(2)} · ${jornada.numero||journeyNumber(jornada.id)}`);
+      return{ok:true,id:ref.id};
+    }catch(e){return{ok:false,error:e?.code==='permission-denied'?'Firestore no permitió registrar el movimiento de caja. Publica las reglas v35.':(e.message||'No se pudo registrar el movimiento de caja')}}
   }
 
   function today(){return limaParts().fecha} function salesToday(){return state.sales.filter(s=>s.fecha===today()&&s.estado!=='Anulada')} function expensesToday(){return state.expenses.filter(e=>e.fecha===today())} function totalSales(fn){return (fn?state.sales.filter(fn):state.sales).filter(s=>s.estado!=='Anulada').reduce((a,b)=>a+Number(b.total||0),0)} function totalExpenses(fn){return(fn?state.expenses.filter(fn):state.expenses).reduce((a,b)=>a+Number(b.monto||0),0)}
@@ -628,60 +890,97 @@ const Store = (() => {
     if(!Number.isFinite(initial)||initial<0)return{ok:false,error:'Monto inicial inválido'};
     const u=state.currentUser,t=limaParts();
     if(!u)return{ok:false,error:'Sesión no válida'};
-    if(state.cashSessions.some(x=>x.usuarioId===u.id&&x.estado==='Abierta'))return{ok:false,error:'Ya tienes una caja abierta'};
-
-    // El listener de caja abierta ya confirmó el estado actual sin releer el historial.
+    if(getOpenCash(u.id)||getOpenJourney(u.id))return{ok:false,error:'Ya tienes una jornada abierta'};
 
     const ref=db.collection('cashSessions').doc(), cashId=ref.id;
+    const journeyRef=db.collection('jornadas').doc(cashId);
     const lockRef=db.collection('cashLocks').doc(u.id);
-    const payload={...t,usuarioId:u.id,usuarioNombre:`${u.nombres||''} ${u.apellidos||''}`.trim(),montoInicial:+initial.toFixed(2),estado:'Abierta',createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    const usuarioNombre=`${u.nombres||''} ${u.apellidos||''}`.trim();
+    const cashPayload={...t,usuarioId:u.id,usuarioNombre,montoInicial:+initial.toFixed(2),jornadaId:cashId,estado:'Abierta',createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+    const journeyPayload={numero:journeyNumber(cashId),fechaApertura:t.fecha,horaApertura:t.hora,usuarioId:u.id,usuarioNombre,cajaId:cashId,montoInicial:+initial.toFixed(2),estado:'Abierta',createdAt:firebase.firestore.FieldValue.serverTimestamp()};
     try{
-      // El documento cashLocks/{uid} serializa aperturas concurrentes entre pestañas/equipos.
       await db.runTransaction(async tx=>{
         const lockSnap=await tx.get(lockRef);
         let previousCashSnap=null;
-        if(lockSnap.exists && lockSnap.data().cajaId){
-          previousCashSnap=await tx.get(db.collection('cashSessions').doc(lockSnap.data().cajaId));
-        }
-        if(previousCashSnap?.exists && previousCashSnap.data().estado==='Abierta')throw Error('Ya tienes una caja abierta en otro dispositivo o pestaña');
-        tx.set(ref,payload);
-        tx.set(lockRef,{usuarioId:u.id,cajaId:cashId,estado:'Abierta',fecha:t.fecha,hora:t.hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        if(lockSnap.exists && lockSnap.data().cajaId)previousCashSnap=await tx.get(db.collection('cashSessions').doc(lockSnap.data().cajaId));
+        if(previousCashSnap?.exists && previousCashSnap.data().estado==='Abierta')throw Error('Ya tienes una jornada abierta en otro dispositivo o pestaña');
+        tx.set(ref,cashPayload);
+        tx.set(journeyRef,journeyPayload);
+        tx.set(lockRef,{usuarioId:u.id,cajaId:cashId,jornadaId:cashId,estado:'Abierta',fecha:t.fecha,hora:t.hora,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
-      trackUsage('reads',1);trackUsage('writes',2);
-      if(!state.cashSessions.some(x=>x.id===cashId))state.cashSessions.push({id:cashId,...t,usuarioId:u.id,usuarioNombre:payload.usuarioNombre,montoInicial:+initial.toFixed(2),estado:'Abierta'});
-      validatedCashId=cashId;try{await safeAudit('ABRIR_CAJA',`S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
-      return{ok:true,id:cashId};
+      trackUsage('reads',1);trackUsage('writes',3);
+      if(!state.cashSessions.some(x=>x.id===cashId))state.cashSessions.push({id:cashId,...cashPayload});
+      if(!state.jornadas.some(x=>x.id===cashId))state.jornadas.push({id:cashId,...journeyPayload});
+      validatedCashId=cashId;
+      try{await safeAudit('ABRIR_JORNADA',`${journeyPayload.numero} · Monto inicial S/${initial.toFixed(2)}`);}catch(err){console.warn('Auditoría de apertura:',err);}
+      return{ok:true,id:cashId,jornadaId:cashId,numero:journeyPayload.numero};
     }catch(e){
-      return{ok:false,error:e?.code==='permission-denied'?'No se pudo abrir la caja. Publica las reglas Firestore incluidas en esta versión.':(e.message||'No se pudo abrir la caja')}
+      return{ok:false,error:e?.code==='permission-denied'?'No se pudo abrir la jornada. Publica las reglas Firestore v35 incluidas en esta versión.':(e.message||'No se pudo abrir la jornada')}
     }
   }
+
   async function closeCash(real){
     real=Number(real);
     if(!Number.isFinite(real)||real<0)return{ok:false,error:'Efectivo real inválido'};
-    const u=state.currentUser,c=state.cashSessions.find(x=>x.usuarioId===u.id&&x.estado==='Abierta');
-    if(!c)return{ok:false,error:'No hay caja abierta'};
+    const u=state.currentUser,c=getOpenCash(u?.id);
+    if(!c)return{ok:false,error:'No hay una jornada abierta'};
+    const jornada=getOpenJourney(u.id)||await ensureJourneyForOpenCash(c);
+    if(!jornada)return{ok:false,error:'No se pudo cargar la jornada activa'};
     try{
-      // Al cerrar, se toma TODA la sesión por cajaId. Así una caja puede atravesar medianoche
-      // sin perder ventas del día de apertura ni del día siguiente.
-      const loaded=await loadSalesForCash(c.id,{force:true});
-      if(!loaded.ok)throw Error(loaded.error||'No se pudieron cargar las ventas de esta caja');
+      const [loadedSales,loadedExpenses,loadedCashMovements]=await Promise.all([
+        loadSalesForCash(c.id,{force:true}),
+        loadExpensesForJourney(jornada.id,{force:true}),
+        loadCashMovementsForJourney(jornada.id,{force:true})
+      ]);
+      if(!loadedSales.ok)throw Error(loadedSales.error||'No se pudieron cargar las ventas de esta jornada');
+      if(!loadedExpenses.ok)throw Error('Cierre bloqueado: no se pudieron verificar todos los gastos: '+(loadedExpenses.error||''));
+      if(!loadedCashMovements.ok)throw Error('Cierre bloqueado: no se pudieron verificar todos los movimientos de caja: '+(loadedCashMovements.error||''));
       const ventas=state.sales.filter(s=>s.empleadoId===u.id&&s.cajaId===c.id&&s.estado!=='Anulada');
+      const gastos=state.expenses.filter(e=>(e.jornadaId===jornada.id||e.cajaId===c.id));
+      const movCaja=state.cashMovements.filter(m=>m.jornadaId===jornada.id||m.cajaId===c.id);
       const pay=paymentTotals(ventas);
       const efectivo=pay.Efectivo,yape=pay.Yape,plin=pay.Plin,tarjeta=pay.Tarjeta;
-      const totalVentasDia=+(efectivo+yape+plin+tarjeta).toFixed(2),esperado=+(Number(c.montoInicial||0)+efectivo).toFixed(2),dif=+(real-esperado).toFixed(2),t=limaParts();
-      const ref=db.collection('cashSessions').doc(c.id), lockRef=db.collection('cashLocks').doc(u.id);
+      const totalVentas=+(efectivo+yape+plin+tarjeta).toFixed(2);
+      const totalGastos=+gastos.reduce((a,e)=>a+Number(e.monto||0),0).toFixed(2);
+      const gastosEfectivo=+gastos.filter(e=>String(e.metodoPago||'Otro')==='Efectivo').reduce((a,e)=>a+Number(e.monto||0),0).toFixed(2);
+      const ingresosEfectivo=+movCaja.filter(m=>m.tipo==='Ingreso').reduce((a,m)=>a+Number(m.monto||0),0).toFixed(2);
+      const retirosEfectivo=+movCaja.filter(m=>m.tipo==='Retiro').reduce((a,m)=>a+Number(m.monto||0),0).toFixed(2);
+      const esperado=+(Number(c.montoInicial||0)+efectivo+ingresosEfectivo-retirosEfectivo-gastosEfectivo).toFixed(2);
+      const dif=+(real-esperado).toFixed(2),t=limaParts();
+      const duracionMinutos=journeyDurationMinutes(jornada,t);
+      const ref=db.collection('cashSessions').doc(c.id), journeyRef=db.collection('jornadas').doc(jornada.id), lockRef=db.collection('cashLocks').doc(u.id);
+      const closeSummary={
+        estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:totalVentas,cantidadVentasDia:ventas.length,
+        efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),
+        ingresosEfectivo,retirosEfectivo,gastosEfectivo,esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2),closedAt:firebase.firestore.FieldValue.serverTimestamp()
+      };
+      const employeeMap=new Map();
+      ventas.forEach(v=>{if(v.empleadoId)employeeMap.set(v.empleadoId,v.empleadoNombre||`${u.nombres||''} ${u.apellidos||''}`.trim())});
+      if(!employeeMap.size)employeeMap.set(u.id,`${u.nombres||''} ${u.apellidos||''}`.trim());
+      const journeySummary={
+        estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,duracionMinutos,
+        totalVentas,cantidadVentas:ventas.length,totalGastos,
+        efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),
+        ingresosEfectivo,retirosEfectivo,gastosEfectivo,efectivoEsperado:+esperado.toFixed(2),efectivoReal:+real.toFixed(2),diferencia:+dif.toFixed(2),
+        empleadoIds:[...employeeMap.keys()],empleadoNombres:[...employeeMap.values()],
+        closedAt:firebase.firestore.FieldValue.serverTimestamp()
+      };
       await db.runTransaction(async tx=>{
-        const snap=await tx.get(ref);
-        const lockSnap=await tx.get(lockRef);
-        if(!snap.exists||snap.data().estado!=='Abierta')throw Error('La caja ya no está abierta');
-        tx.update(ref,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2),closedAt:firebase.firestore.FieldValue.serverTimestamp()});
+        const [snap,jSnap,lockSnap]=await Promise.all([tx.get(ref),tx.get(journeyRef),tx.get(lockRef)]);
+        if(!snap.exists||snap.data().estado!=='Abierta')throw Error('La caja de esta jornada ya no está abierta');
+        if(!jSnap.exists||jSnap.data().estado!=='Abierta')throw Error('La jornada ya no está abierta');
+        tx.update(ref,closeSummary);
+        tx.update(journeyRef,journeySummary);
         if(lockSnap.exists && lockSnap.data().cajaId===c.id)tx.delete(lockRef);
-      });trackUsage('reads',2);trackUsage('writes',1);trackUsage('deletes',1);
-      const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,{estado:'Cerrada',fechaCierre:t.fecha,horaCierre:t.hora,totalVentasDia:+totalVentasDia.toFixed(2),cantidadVentasDia:ventas.length,efectivoVentas:+efectivo.toFixed(2),yapeVentas:+yape.toFixed(2),plinVentas:+plin.toFixed(2),tarjetaVentas:+tarjeta.toFixed(2),esperado:+esperado.toFixed(2),real:+real.toFixed(2),diferencia:+dif.toFixed(2)});
-      validatedCashId=null;await safeAudit('CERRAR_CAJA',`Ventas de la sesión S/${totalVentasDia.toFixed(2)} · Diferencia efectivo S/${dif.toFixed(2)}`);
-      return{ok:true,diferencia:dif,totalVentasDia};
-    }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la caja'}}
+      });
+      const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,closeSummary,{closedAt:new Date()});
+      const localJ=state.jornadas.find(x=>x.id===jornada.id);if(localJ)Object.assign(localJ,journeySummary,{closedAt:new Date()});
+      validatedCashId=null;
+      await safeAudit('CERRAR_JORNADA',`${jornada.numero||journeyNumber(jornada.id)} · Ventas S/${totalVentas.toFixed(2)} · Gastos S/${totalGastos.toFixed(2)} · Diferencia S/${dif.toFixed(2)}`);
+      return{ok:true,diferencia:dif,totalVentasDia:totalVentas,totalGastos,duracionMinutos,jornadaId:jornada.id};
+    }catch(e){return{ok:false,error:e.message||'No se pudo cerrar la jornada'}}
   }
+
 
   // ===== REINICIO TOTAL DEL SISTEMA v32 =====
   // Ya no existe una clave fija en el código. Antes de borrar se reautentica al
@@ -724,8 +1023,8 @@ const Store = (() => {
     stop();
     try {
       const collections = [
-        'cashLocks','cashSessions','sales','expenses','movements',
-        'products','deletedProducts','categories','deletedCategories','audits'
+        'cashLocks','cashSessions','jornadas','cashMovements','sales','expenses','movements',
+        'products','deletedProducts','categories','deletedCategories','audits','deletedExpenses','expenseRevisions'
       ];
       for (const name of collections) counts[name] = await purgeCollection(name);
       // Conservar únicamente el perfil del administrador conectado para no perder el acceso.
@@ -738,6 +1037,8 @@ const Store = (() => {
       state.movements = [];
       state.expenses = [];
       state.cashSessions = [];
+      state.jornadas = [];
+      state.cashMovements = [];
       state.audits = [];
       state.cart = [];
       validatedCashId = null;
@@ -764,5 +1065,5 @@ const Store = (() => {
     }
   }
 
-  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,refreshDailyContext,loadSalesForDate,loadSalesForRange,loadSalesForCash,loadExpensesForRange,loadMovementsForRange,daysAgo,getSalePayments,paymentTotals,salePaymentLabel,updateExpense:(...a)=>guarded('updateExpense:'+a[0],()=>updateExpense(...a)),deleteExpense:(...a)=>guarded('deleteExpense:'+a[0],()=>deleteExpense(...a)),resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
+  return {state,load,login,logout,getCategory,getProduct,getUser,stockStatus,lowStockProducts,addUser:(...a)=>guarded('addUser',()=>addUser(...a)),updateUser:(...a)=>guarded('updateUser:'+a[0],()=>updateUser(...a)),sendPasswordReset:(...a)=>guarded('resetPassword:'+a[0],()=>sendPasswordReset(...a)),deleteUser:(...a)=>guarded('deleteUser:'+a[0],()=>deleteUser(...a)),addCategory:(...a)=>guarded('addCategory',()=>addCategory(...a)),updateCategory:(...a)=>guarded('updateCategory:'+a[0],()=>updateCategory(...a)),deleteCategory:(...a)=>guarded('deleteCategory:'+a[0],()=>deleteCategory(...a)),addProduct:(...a)=>guarded('addProduct',()=>addProduct(...a)),updateProduct:(...a)=>guarded('updateProduct:'+a[0],()=>updateProduct(...a)),deleteProduct:(...a)=>guarded('deleteProduct:'+a[0],()=>deleteProduct(...a)),addMovement:(...a)=>guarded('movement:'+a[0]?.productoId,()=>addMovement(...a)),addToCart,updateCartQty,removeFromCart,clearCart,getCartTotal,confirmSale:(...a)=>guarded('sale',()=>confirmSale(...a)),cancelSale:(...a)=>guarded('cancelSale:'+a[0],()=>cancelSale(...a)),addExpense:(...a)=>guarded('expense',()=>addExpense(...a)),today,salesToday,expensesToday,totalSales,totalExpenses,openCash:(...a)=>guarded('openCash',()=>openCash(...a)),closeCash:(...a)=>guarded('closeCash',()=>closeCash(...a)),preparePage,refreshDailyContext,loadSalesForDate,loadSalesForRange,loadSalesForCash,loadExpensesForRange,loadMovementsForRange,loadJourneyHistory,loadExpensesForJourney,loadMovementsForJourney,loadCashMovementsForJourney,loadJourneyDetail,daysAgo,getSalePayments,paymentTotals,salePaymentLabel,getOpenJourney,getOpenCash,journeyDurationMinutes,journeyNumber,addCashMovement:(...a)=>guarded('cashMovement',()=>addCashMovement(...a)),updateExpense:(...a)=>guarded('updateExpense:'+a[0],()=>updateExpense(...a)),deleteExpense:(...a)=>guarded('deleteExpense:'+a[0],()=>deleteExpense(...a)),resetSystem:(...a)=>guarded('resetSystem',()=>resetSystem(...a)),audit};
 })();

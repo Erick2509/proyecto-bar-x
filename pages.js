@@ -1628,10 +1628,78 @@ const Pages = {
     `);
   },
 
+  _reportRange: null,
+  _reportBusy: false,
+  _reportDefaultRange() { return { desde: Store.daysAgo(30), hasta: Store.today() }; },
+  _reportTotals(desde, hasta) {
+    const sales = Store.state.sales.filter(s => s.estado !== 'Anulada' && s.fecha >= desde && s.fecha <= hasta);
+    const expenses = Store.state.expenses.filter(e => e.fecha >= desde && e.fecha <= hasta && e.estado !== 'Anulado');
+    return { ventas: sales.reduce((n,s) => n + Number(s.total||0), 0),
+      gastos: expenses.reduce((n,e) => n + Number(e.monto||0), 0),
+      pagos: Store.paymentTotals(sales) };
+  },
+  _reportCard(icon, label, amount, tone) {
+    return `<article class="report-metric report-metric--${tone}" aria-label="${label}">
+      <div class="report-metric-head"><span class="report-metric-icon" aria-hidden="true">${icon}</span><span class="report-metric-label">${label}</span></div>
+      <div class="report-metric-value">${Utils.formatMoney(amount)}</div>
+    </article>`;
+  },
+  _reportCards(desde, hasta) {
+    const {ventas,gastos,pagos}=this._reportTotals(desde,hasta);
+    return this._reportCard('💰','Ventas',ventas,'green') +
+      this._reportCard('💸','Gastos',gastos,'rose') +
+      this._reportCard('💵','Efectivo',pagos.Efectivo,'teal') +
+      this._reportCard('📱','Yape',pagos.Yape,'purple') +
+      this._reportCard('🔵','Plin',pagos.Plin,'blue') +
+      this._reportCard('💳','Tarjeta',pagos.Tarjeta,'gold');
+  },
   reportes(){
     if(!Auth.requireAdmin())return '';
-    const desde=Store.daysAgo(30),sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde),ventas=sales.reduce((a,b)=>a+Number(b.total||0),0),costo=sales.reduce((a,b)=>a+Number(b.costoTotal||0),0),exp=Store.state.expenses.filter(e=>e.fecha>=desde),gastos=exp.reduce((a,b)=>a+Number(b.monto||0),0),util=ventas-costo-gastos,pay=Store.paymentTotals(sales);
-    return `<div class="page-header"><div><h1 class="page-title">📈 Reportes</h1><p class="ux-page-sub">Resumen de los últimos 31 días.</p></div></div><div class="row g-3"><div class="col-6 col-lg-3"><div class="card p-3"><small>💰 Ventas</small><h3>${Utils.formatMoney(ventas)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>📦 Costo vendido</small><h3>${Utils.formatMoney(costo)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>💸 Gastos</small><h3>${Utils.formatMoney(gastos)}</h3></div></div><div class="col-6 col-lg-3"><div class="card p-3"><small>📊 Resultado estimado</small><h3>${Utils.formatMoney(util)}</h3></div></div></div><div class="card p-3 mt-3"><h5>💳 Ventas por método</h5>${['Efectivo','Yape','Plin','Tarjeta'].map(k=>`<div class="d-flex justify-content-between border-bottom py-2"><span>${k}</span><strong>${Utils.formatMoney(pay[k])}</strong></div>`).join('')}</div>`;
+    const range=this._reportRange || this._reportDefaultRange();
+    const {desde,hasta}=range;
+    const safeDate=x=>/^\d{4}-\d{2}-\d{2}$/.test(x)?x:Store.today();
+    return `<div class="report-page">
+      <div class="page-header"><div><h1 class="page-title">📈 Reportes</h1><p class="ux-page-sub">Consulta los totales del negocio por fecha y método de pago.</p></div></div>
+      <section class="report-filter" aria-label="Filtro de fechas">
+        <div class="report-filter-title"><span>📅</span><div><strong>Rango de fechas</strong><small>Los totales se actualizan según el periodo seleccionado.</small></div></div>
+        <div class="report-filter-fields"><label>Desde<input id="report-from" class="form-control" type="date" value="${safeDate(desde)}"></label>
+        <label>Hasta<input id="report-to" class="form-control" type="date" value="${safeDate(hasta)}"></label>
+        <button id="report-apply" class="btn btn-primary" type="button" onclick="Pages.applyReportRange()">Aplicar filtro</button>
+        <button class="btn btn-secondary" type="button" onclick="Pages.resetReportRange()">Últimos 31 días</button></div>
+        <div id="report-filter-status" class="report-filter-status" role="status" aria-live="polite">Mostrando ${safeDate(desde)} al ${safeDate(hasta)}</div>
+      </section>
+      <div id="report-cards" class="report-metrics" aria-live="polite">${this._reportCards(desde,hasta)}</div>
+      <p class="report-footnote">Los métodos de pago representan ventas cobradas (incluidos pagos divididos). Efectivo no incluye ingresos ni retiros de caja. Las ventas anuladas no se suman.</p>
+    </div>`;
+  },
+  async applyReportRange(){
+    if(this._reportBusy)return;
+    const desde=document.getElementById('report-from')?.value;
+    const hasta=document.getElementById('report-to')?.value;
+    const status=document.getElementById('report-filter-status');
+    const valid=x=>/^\d{4}-\d{2}-\d{2}$/.test(x)&&!Number.isNaN(Date.parse(x+'T12:00:00Z'));
+    if(!valid(desde)||!valid(hasta)||desde>hasta){Toast.show('Selecciona un rango de fechas válido','error');return;}
+    // Evitar consultas de años completos por accidente en el plan gratuito.
+    const days=(Date.parse(hasta+'T12:00:00Z')-Date.parse(desde+'T12:00:00Z'))/86400000;
+    if(days>365){Toast.show('Selecciona como máximo 366 días por consulta','error');return;}
+    this._reportBusy=true;
+    const btn=document.getElementById('report-apply');if(btn){btn.disabled=true;btn.textContent='Cargando…';}
+    if(status)status.textContent='Consultando información del periodo…';
+    try{
+      const results=await Promise.all([Store.loadSalesForRange(desde,hasta),Store.loadExpensesForRange(desde,hasta)]);
+      const fail=results.find(x=>!x?.ok);
+      if(fail){if(status)status.textContent='No se pudieron cargar todos los datos. Se mantienen los totales anteriores.';Toast.show(fail.error||'Error consultando reportes','error');return;}
+      this._reportRange={desde,hasta};
+      const cards=document.getElementById('report-cards');if(cards)cards.innerHTML=this._reportCards(desde,hasta);
+      if(status)status.textContent=`Mostrando ${desde} al ${hasta}`;
+    }catch(e){if(status)status.textContent='Error al actualizar el reporte';Toast.show(e.message||'Error al cargar reporte','error');}
+    finally{this._reportBusy=false;if(btn){btn.disabled=false;btn.textContent='Aplicar filtro';}}
+  },
+  async resetReportRange(){
+    const d=this._reportDefaultRange();
+    document.getElementById('report-from').value=d.desde;
+    document.getElementById('report-to').value=d.hasta;
+    await this.applyReportRange();
   },
   async anularVenta(id){const motivo=prompt('Motivo de anulación:')?.trim();if(!motivo)return;confirmAction('La venta será anulada y el stock será devuelto. Esta acción no debe repetirse. ¿Confirmar?',async()=>{const r=await Store.cancelSale(id,motivo);Toast.show(r.ok?'Venta anulada':r.error,r.ok?'success':'error');if(r.ok){Modal.close();Router.go('historial')}return r;},{title:'Anular venta',confirmText:'Anular venta',danger:true,key:'cancel-sale:'+id})}
 ,

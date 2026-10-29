@@ -1770,7 +1770,7 @@ const Pages = {
           <input class="form-control" id="backup-zip-input" type="file" accept=".zip,application/zip" onchange="BackupManager.addPart(this)">
           <div id="backup-restore-controls" hidden class="mt-2"><p id="backup-restore-summary"></p><button class="btn btn-danger" onclick="BackupManager.restoreMissing()">Recuperar documentos faltantes / continuar</button></div>
         </div>
-        <div class="mt-3" id="backup-progress" aria-live="polite"></div>
+        <div class="mt-3" id="backup-progress" aria-live="polite"></div><div id="backup-collection-progress" class="barx-restore-collections" aria-live="polite"></div><p class="text-warning">Durante la restauración se activa el modo mantenimiento. Si se interrumpe, permanecerá activo hasta completar la recuperación.</p>
         <p class="ux-help mt-2" id="backup-status" aria-live="polite">Sin operación en curso.</p>
         <p class="text-muted small">La cuota gratuita diaria es compartida con el bar. El navegador no conoce la cuota exacta restante. Si se pausa, se conserva el cursor localmente y se requiere volver a abrir el sistema e importar el ZIP. No borres el almacenamiento del navegador antes de terminar.</p>
       </div>

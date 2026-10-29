@@ -110,6 +110,15 @@ const Router = {
       App.showLogin();
       return;
     }
+    // En modo mantenimiento únicamente el administrador puede acceder a Configuración.
+    if(typeof BackupManager!=='undefined' && BackupManager.isMaintenance){
+      let locked=true;try{locked=await BackupManager.isMaintenance();}catch(e){console.warn('Estado de mantenimiento no verificable',e);}
+      if(locked && !(Auth.isAdmin() && page==='configuracion')){
+        this.current='mantenimiento';const main=document.getElementById('main-content');
+        main.innerHTML='<section class="alert alert-warning m-3"><h2>Restauración en curso</h2><p>El sistema está temporalmente inhabilitado. El administrador debe finalizar y verificar la restauración.</p></section>';
+        document.getElementById('fab-cart')?.classList.add('hidden');return;
+      }
+    }
     // Guard routes
     const adminOnly = ['movimientos', 'categorias', 'productos', 'empleados', 'gastos', 'reportes', 'configuracion'];
     if (adminOnly.includes(page) && !Auth.isAdmin()) {

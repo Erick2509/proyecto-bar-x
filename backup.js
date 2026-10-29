@@ -1,11 +1,21 @@
-/* ProyectoBarX v42: recuperación reanudable con diagnóstico, reintentos y verificación. NO restauración total. */
+/* ProyectoBarX v43: recuperación reanudable con diagnóstico, reintentos y verificación. NO restauración total. */
 const BackupManager = (() => {
   const COLLECTIONS=['users','categories','products','deletedProducts','deletedCategories','sales','expenses','deletedExpenses','expenseRevisions','movements','cashSessions','jornadas','cashMovements','cashLocks','audits'];
   const encoder=new TextEncoder();
   const BUDGET=5000; // máximo preventivo por día local, no indica cuota disponible
   let draft=null, imported=null, authorizedAt=0, busy=false;
+  const lockRef=()=>db.collection('system').doc('restoreState');
+  async function setMaintenance(active,backupId){assertAdmin();await lockRef().set({active,backupId,ownerUid:fbAuth.currentUser.uid,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});}
+  async function isMaintenance(){try{const s=await lockRef().get({source:'server'});return s.exists&&s.data().active===true;}catch(e){throw Error('No se puede comprobar el modo mantenimiento: '+e.message);}}
   const status=(s,error=false)=>{const e=document.getElementById('backup-status');if(e){e.textContent=s;e.style.color=error?'#dc3545':'';}};
   const progress=(n,total,label)=>{const v=total?Math.floor(n*100/total):0;const e=document.getElementById('backup-progress');if(e){e.replaceChildren();e.textContent=`${label}: ${v}% (${n.toLocaleString('es-PE')}/${total.toLocaleString('es-PE')})`;const bar=document.createElement('div');bar.className='progress';bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuenow',String(v));bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');const inner=document.createElement('div');inner.className='progress-bar';inner.style.width=v+'%';bar.append(inner);e.append(bar);}};
+  function detailsProgress(docs,index){
+    const target=document.getElementById('backup-collection-progress');if(!target)return;
+    target.replaceChildren();const counts=new Map();
+    docs.forEach((d,i)=>{let v=counts.get(d.collection)||{total:0,done:0};v.total++;if(i<index)v.done++;counts.set(d.collection,v);});
+    const names={users:'Usuarios',categories:'Categorías',products:'Productos',deletedProducts:'Productos eliminados',deletedCategories:'Categorías eliminadas',sales:'Ventas',expenses:'Gastos',deletedExpenses:'Gastos eliminados',expenseRevisions:'Revisiones de gastos',movements:'Movimientos de inventario',cashSessions:'Sesiones de caja',jornadas:'Jornadas',cashMovements:'Movimientos de efectivo',cashLocks:'Bloqueos de caja',audits:'Auditoría'};
+    for(const [key,c] of counts){const pct=Math.floor(100*c.done/c.total);const item=document.createElement('div');item.className='barx-restore-row';const label=document.createElement('div');label.textContent=`${names[key]||key}: ${c.done}/${c.total} (${pct}%) · ${c.done===c.total?'Completado':c.done?'En proceso':'Pendiente'}`;const track=document.createElement('div');track.className='progress';const fill=document.createElement('div');fill.className='progress-bar';fill.style.width=pct+'%';track.append(fill);item.append(label,track);target.append(item);}
+  }
   const assertAdmin=()=>{if(!Auth.isAdmin()||!fbAuth.currentUser||fbAuth.currentUser.uid!==Auth.currentUser()?.id)throw Error('Requiere una cuenta de administrador autenticada.');};
   const assertZip=()=>{if(typeof JSZip==='undefined')throw Error('No se ha cargado JSZip.');};
   const permit=()=>{assertAdmin();if(Date.now()-authorizedAt>10*60*1000)throw Error('La autorización caducó. Vuelve a verificar la contraseña.');};
@@ -20,7 +30,7 @@ const BackupManager = (() => {
   function renderInfo(){const e=document.getElementById('backup-estimate');if(e)e.textContent=draft?`${draft.docs.length.toLocaleString('es-PE')} documentos; ${fmt(bytes(draft.payload))} de JSON antes de comprimir. Se generará UN ZIP.`:'Primero calcula el tamaño de los datos desde Firestore.';}
   async function exportParts(){try{assertAdmin();assertZip();if(!draft)throw Error('Primero calcula el respaldo.');if(busy)throw Error('Operación en curso.');busy=true;const payload=draft.payload;const backupId='BARX-'+Date.now();const manifest={format:'barx-single-v2',backupId,projectId:firebaseConfig.projectId,createdAt:draft.createdAt,documentCount:draft.docs.length,sha256:await hash(payload),collections:COLLECTIONS};const zip=new JSZip();zip.file('manifest.json',JSON.stringify(manifest,null,2));zip.file('documents.json',payload);status('Comprimiendo ZIP único...');const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:4}});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=backupId+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);status('Descarga iniciada: '+fmt(blob.size)+'. Comprueba que se guardó el archivo; la copia no incluye Authentication, reglas ni índices.');draft=null;renderInfo();}catch(e){status('Error: '+e.message,true);}finally{busy=false;}}
   async function access(){try{assertAdmin();const input=document.getElementById('backup-password');const user=fbAuth.currentUser;if(!user.email)throw Error('Necesitas una cuenta Firebase con correo y contraseña.');if(!input?.value)throw Error('Introduce la contraseña.');await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email,input.value));input.value='';authorizedAt=Date.now();document.getElementById('backup-import-panel').hidden=false;status('Identidad verificada. Selecciona el ZIP.');}catch(e){status('Acceso denegado: '+e.message,true);}}
-  async function addPart(input){try{permit();assertZip();const file=input?.files?.[0];if(!file)return;if(busy)throw Error('Operación en curso.');busy=true;const zip=await JSZip.loadAsync(file);if(!zip.file('manifest.json')||!zip.file('documents.json'))throw Error('ZIP no reconocido.');const manifest=JSON.parse(await zip.file('manifest.json').async('text'));if(manifest.format!=='barx-single-v2'||manifest.projectId!==firebaseConfig.projectId)throw Error('Formato o proyecto Firebase incorrecto.');const payload=await zip.file('documents.json').async('text');if(await hash(payload)!==manifest.sha256)throw Error('La copia no supera la verificación SHA-256.');const docs=JSON.parse(payload);if(!Array.isArray(docs)||docs.length!==manifest.documentCount)throw Error('Cantidad de documentos inválida.');const seen=new Set();for(const d of docs){if(!d||!COLLECTIONS.includes(d.collection)||typeof d.id!=='string'||!d.id||d.id.includes('/')||!d.data||typeof d.data!=='object'||Array.isArray(d.data))throw Error('Documento inválido.');const key=d.collection+'/'+d.id;if(seen.has(key))throw Error('Documento duplicado: '+key);seen.add(key);}imported={manifest,docs};const saved=JSON.parse(localStorage.getItem(progressKey(manifest.backupId))||'null');const index=saved?.hash===manifest.sha256?Math.min(saved.index||0,docs.length):0;document.getElementById('backup-restore-controls').hidden=false;document.getElementById('backup-restore-summary').textContent=`${docs.length} documentos válidos. ${index} ya procesados en una sesión anterior. Se omitirán existentes; NO se sobrescribe la base completa.`;progress(index,docs.length,'Listo para recuperar');status('ZIP validado. Comprueba los datos antes de continuar.');}catch(e){status('No se pudo importar: '+e.message,true);}finally{busy=false;if(input)input.value='';}}
+  async function addPart(input){try{permit();assertZip();const file=input?.files?.[0];if(!file)return;if(busy)throw Error('Operación en curso.');busy=true;const zip=await JSZip.loadAsync(file);if(!zip.file('manifest.json')||!zip.file('documents.json'))throw Error('ZIP no reconocido.');const manifest=JSON.parse(await zip.file('manifest.json').async('text'));if(manifest.format!=='barx-single-v2'||manifest.projectId!==firebaseConfig.projectId)throw Error('Formato o proyecto Firebase incorrecto.');const payload=await zip.file('documents.json').async('text');if(await hash(payload)!==manifest.sha256)throw Error('La copia no supera la verificación SHA-256.');const docs=JSON.parse(payload);if(!Array.isArray(docs)||docs.length!==manifest.documentCount)throw Error('Cantidad de documentos inválida.');const seen=new Set();for(const d of docs){if(!d||!COLLECTIONS.includes(d.collection)||typeof d.id!=='string'||!d.id||d.id.includes('/')||!d.data||typeof d.data!=='object'||Array.isArray(d.data))throw Error('Documento inválido.');const key=d.collection+'/'+d.id;if(seen.has(key))throw Error('Documento duplicado: '+key);seen.add(key);}imported={manifest,docs};const saved=JSON.parse(localStorage.getItem(progressKey(manifest.backupId))||'null');const index=saved?.hash===manifest.sha256?Math.min(saved.index||0,docs.length):0;document.getElementById('backup-restore-controls').hidden=false;document.getElementById('backup-restore-summary').textContent=`${docs.length} documentos válidos. ${index} ya procesados en una sesión anterior. Se omitirán existentes; NO se sobrescribe la base completa.`;progress(index,docs.length,'Listo para recuperar');detailsProgress(docs,index);status('ZIP validado. Comprueba los datos antes de continuar.');}catch(e){status('No se pudo importar: '+e.message,true);}finally{busy=false;if(input)input.value='';}}
   function pacificDay(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
   const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const codeOf=e=>String(e?.code||'').replace(/^firestore\//,'').toLowerCase();
@@ -55,7 +65,7 @@ const BackupManager = (() => {
     try{
       permit();if(!imported)throw Error('Importa el ZIP primero.');if(busy)throw Error('Ya existe una restauración activa.');
       if(!confirm('¿Recuperar SOLO los documentos faltantes? Detén previamente las ventas y crea un respaldo actual. No es una restauración total.'))return;
-      busy=true;const {docs,manifest}=imported;await ensureRestoreGrant(manifest.backupId);const key=progressKey(manifest.backupId);
+      busy=true;const {docs,manifest}=imported;await ensureRestoreGrant(manifest.backupId);await setMaintenance(true,manifest.backupId);const key=progressKey(manifest.backupId);
       let checkpoint=JSON.parse(localStorage.getItem(key)||'null');
       if(!checkpoint||checkpoint.hash!==manifest.sha256)checkpoint={hash:manifest.sha256,index:0,day:pacificDay(),attempts:0};
       if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
@@ -79,19 +89,20 @@ const BackupManager = (() => {
           localStorage.setItem(key,JSON.stringify(checkpoint));
           break;
         }
-        if(checkpoint.index%5===0||checkpoint.index===docs.length)progress(checkpoint.index,docs.length,'Restauración');
+        if(checkpoint.index%5===0||checkpoint.index===docs.length){progress(checkpoint.index,docs.length,'Restauración');detailsProgress(docs,checkpoint.index);}
       }
-      progress(checkpoint.index,docs.length,'Restauración');
+      progress(checkpoint.index,docs.length,'Restauración');detailsProgress(docs,checkpoint.index);
       if(checkpoint.index===docs.length){
-        status(`Procesamiento terminado: ${created} recuperados y confirmados en esta ejecución, ${already} ya existentes. Verifica relaciones y registros antes de considerarlo restauración completa.`);
+        await setMaintenance(false,manifest.backupId);
+        status(`Proceso completado: ${created} recuperados, ${already} existentes. Mantenimiento desactivado. Comprueba relaciones y registros: esto NO sobrescribe existentes.`);
         localStorage.removeItem(key);
         try{await db.collection('restoreGrants').doc(fbAuth.currentUser.uid).delete();}catch(e){console.warn('No se pudo revocar la autorización temporal; caduca automáticamente.',e);}
       }else{
-        status(`PAUSADA en ${checkpoint.index}/${docs.length}. CAUSA: ${stoppedReason||'no identificada'}. Archivo y progreso preservados; vuelve a identificarte, importa el mismo ZIP y continúa.`,true);
+        status(`PAUSADA en ${checkpoint.index}/${docs.length}. CAUSA: ${stoppedReason||'no identificada'}. MODO MANTENIMIENTO ACTIVO; se bloquean las operaciones normales. Archivo y progreso preservados; vuelve a identificarte e importa el mismo ZIP para continuar.`,true);
       }
     }catch(e){status('No se pudo continuar: '+(e.code||'')+' '+e.message,true);}
     finally{busy=false;}
   }
   function resetImport(){if(busy)return;imported=null;authorizedAt=0;const e=document.getElementById('backup-import-panel');if(e)e.hidden=true;const c=document.getElementById('backup-restore-controls');if(c)c.hidden=true;status('Sesión de importación cerrada. Los checkpoints locales no se eliminan.');}
-  return {measure,renderInfo,exportParts,access,addPart,restoreMissing,resetImport};
+  return {measure,renderInfo,exportParts,access,addPart,restoreMissing,resetImport,isMaintenance};
 })();

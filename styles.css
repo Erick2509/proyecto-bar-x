@@ -1421,3 +1421,5 @@ select option { background:#1c1a16; color:#f7f3ed; }
 @media(max-width:600px){.report-filter{padding:15px}.report-filter-fields{display:grid;grid-template-columns:1fr 1fr}.report-filter-fields label{min-width:0}.report-filter-fields button{width:100%}.report-metrics{gap:10px}.report-metric{padding:15px}.report-metric-value{font-size:clamp(20px,5vw,27px)}.report-metric-icon{width:34px;height:34px;font-size:18px}}
 @media(max-width:375px){.report-filter-fields{grid-template-columns:1fr}.report-metrics{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.report-metric{transition:none}.report-metric:hover{transform:none}}
+
+.barx-restore-collections{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}.barx-restore-row{background:#1e211e;padding:10px;border:1px solid #343b35;border-radius:10px;font-size:13px}.barx-restore-row .progress{margin-top:7px;height:7px}

@@ -1,4 +1,4 @@
-/* ProyectoBarX v41: recuperación reanudable con diagnóstico, reintentos y verificación. NO restauración total. */
+/* ProyectoBarX v42: recuperación reanudable con diagnóstico, reintentos y verificación. NO restauración total. */
 const BackupManager = (() => {
   const COLLECTIONS=['users','categories','products','deletedProducts','deletedCategories','sales','expenses','deletedExpenses','expenseRevisions','movements','cashSessions','jornadas','cashMovements','cashLocks','audits'];
   const encoder=new TextEncoder();
@@ -41,12 +41,21 @@ const BackupManager = (() => {
     if(!verified.exists)throw Error('No se pudo confirmar la escritura en Firestore.');
     return 'created';
   }
+  async function ensureRestoreGrant(backupId){
+    permit();
+    // La sesión solo habilita CREAR documentos faltantes en colecciones históricas.
+    // No sustituye permisos de lectura, ni permite sobrescribir documentos.
+    const ref=db.collection('restoreGrants').doc(fbAuth.currentUser.uid);
+    await ref.set({ownerUid:fbAuth.currentUser.uid,backupId,
+      createdAt:firebase.firestore.FieldValue.serverTimestamp(),
+      expiresAt:firebase.firestore.Timestamp.fromMillis(Date.now()+8*60*1000)});
+  }
   async function restoreMissing(){
     let stoppedReason=null;
     try{
       permit();if(!imported)throw Error('Importa el ZIP primero.');if(busy)throw Error('Ya existe una restauración activa.');
       if(!confirm('¿Recuperar SOLO los documentos faltantes? Detén previamente las ventas y crea un respaldo actual. No es una restauración total.'))return;
-      busy=true;const {docs,manifest}=imported;const key=progressKey(manifest.backupId);
+      busy=true;const {docs,manifest}=imported;await ensureRestoreGrant(manifest.backupId);const key=progressKey(manifest.backupId);
       let checkpoint=JSON.parse(localStorage.getItem(key)||'null');
       if(!checkpoint||checkpoint.hash!==manifest.sha256)checkpoint={hash:manifest.sha256,index:0,day:pacificDay(),attempts:0};
       if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
@@ -56,6 +65,7 @@ const BackupManager = (() => {
         try{permit();}catch(e){stoppedReason='Autorización: '+e.message;break;}
         if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
         if(checkpoint.attempts>=BUDGET){stoppedReason='Presupuesto preventivo diario de '+BUDGET+' documentos alcanzado. Puedes continuar cuando se renueve el día del Pacífico.';break;}
+        if(Date.now()-authorizedAt>7*60*1000){stoppedReason='La autorización temporal está por vencer. Vuelve a introducir la contraseña y continúa.';break;}
         const d=docs[checkpoint.index];
         try{
           const outcome=await restoreOne(d);
@@ -75,6 +85,7 @@ const BackupManager = (() => {
       if(checkpoint.index===docs.length){
         status(`Procesamiento terminado: ${created} recuperados y confirmados en esta ejecución, ${already} ya existentes. Verifica relaciones y registros antes de considerarlo restauración completa.`);
         localStorage.removeItem(key);
+        try{await db.collection('restoreGrants').doc(fbAuth.currentUser.uid).delete();}catch(e){console.warn('No se pudo revocar la autorización temporal; caduca automáticamente.',e);}
       }else{
         status(`PAUSADA en ${checkpoint.index}/${docs.length}. CAUSA: ${stoppedReason||'no identificada'}. Archivo y progreso preservados; vuelve a identificarte, importa el mismo ZIP y continúa.`,true);
       }

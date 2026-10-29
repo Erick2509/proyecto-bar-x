@@ -26,6 +26,8 @@ const Store = (() => {
   // Solo mantenemos listeners en datos que realmente necesitan tiempo real. Los historiales
   // se consultan bajo demanda y con límites para evitar descargar toda la base en cada inicio.
   const loadedAt = {};
+  // Evita consultas duplicadas cuando dos pantallas requieren el mismo rango.
+  const pendingFetches = new Map();
   let coreLoadedFor = null;
   let liveBusinessDate = null;
   // v30: se retiró el monitor local anterior. trackUsage queda como no-op por compatibilidad interna.
@@ -50,11 +52,24 @@ const Store = (() => {
       },err=>{ console.error('Firestore '+name+':',err); try{Toast.show('Error cargando '+name+': '+(err.message||err),'error')}catch(_){} resolve(); });
     });
   }
-  async function fetchInto(name,source,{replace=false,cacheKey=null,ttl=300000,predicate=null}={}){
-    const key=cacheKey||name; const now=Date.now();
-    if(loadedAt[key] && now-loadedAt[key]<ttl) return {ok:true,cached:true};
-    try{ const snap=await source.get(); const docs=normalizeDocs(name,snap); trackUsage('reads',Math.max(1,snap.size),docs); replace?replaceState(name,docs):(predicate?(state[name]=state[name].filter(x=>!predicate(x)),mergeState(name,docs)):mergeState(name,docs)); loadedAt[key]=now; return{ok:true,count:docs.length}; }
-    catch(e){ console.error('Carga '+name,e); return{ok:false,error:e.message}; }
+  async function fetchInto(name,source,{replace=false,cacheKey=null,ttl=300000,predicate=null,serverOnly=false}={}){
+    const key=cacheKey||name,now=Date.now();
+    if(!serverOnly && loadedAt[key] && now-loadedAt[key]<ttl) return {ok:true,cached:true};
+    const pendingKey=key+(serverOnly?':server':'');
+    if(pendingFetches.has(pendingKey))return pendingFetches.get(pendingKey);
+    const request=(async()=>{
+      try{
+        // El cierre exige datos confirmados por Firestore, no resultados de caché offline.
+        const snap=await (serverOnly?source.get({source:'server'}):source.get());
+        const docs=normalizeDocs(name,snap);trackUsage('reads',Math.max(1,snap.size),docs);
+        if(replace)replaceState(name,docs);
+        else if(predicate){state[name]=state[name].filter(x=>!predicate(x));mergeState(name,docs);}
+        else mergeState(name,docs);
+        loadedAt[key]=Date.now();return{ok:true,count:docs.length};
+      }catch(e){console.error('Carga '+name,e);return{ok:false,error:e.message};}
+    })();
+    pendingFetches.set(pendingKey,request);
+    try{return await request;}finally{if(pendingFetches.get(pendingKey)===request)pendingFetches.delete(pendingKey);}
   }
   function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Lima',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
   function monthStart(){ return usageDate().slice(0,7)+'-01'; }
@@ -204,14 +219,17 @@ const Store = (() => {
     }
     const dates=datesInRange(desde,hasta,366);
     if(!dates.length)return{ok:false,error:'El rango solicitado es demasiado amplio'};
-    for(const date of dates)await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000});
+    for(const date of dates){
+      const result=await fetchInto('sales',db.collection('sales').where('empleadoId','==',u.id).where('fecha','==',date),{cacheKey:'empSales:'+date,ttl:300000});
+      if(!result.ok)return result;
+    }
     return{ok:true};
   }
   async function loadSalesForCash(cashId,{force=false}={}){
     cashId=String(cashId||'').trim();
     const u=state.currentUser;if(!u||!cashId)return{ok:false,error:'Caja inválida'};
     let q=db.collection('sales').where('empleadoId','==',u.id).where('cajaId','==',cashId);
-    return fetchInto('sales',q,{cacheKey:`cashSales:${cashId}`,ttl:force?0:120000,predicate:x=>x.empleadoId===u.id&&x.cajaId===cashId});
+    return fetchInto('sales',q,{cacheKey:`cashSales:${cashId}`,ttl:force?0:120000,serverOnly:force,predicate:x=>x.empleadoId===u.id&&x.cajaId===cashId});
   }
   async function loadExpensesHistory(){ return fetchInto('expenses',db.collection('expenses').where('fecha','>=',daysAgo(30)).orderBy('fecha','desc'),{cacheKey:'expensesHistory',ttl:300000}); }
   async function loadExpensesForRange(desde,hasta){
@@ -276,7 +294,7 @@ const Store = (() => {
     jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
     const key='expensesJourney:'+jornadaId;
     if(force)delete loadedAt[key];
-    return fetchInto('expenses',db.collection('expenses').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
+    return fetchInto('expenses',db.collection('expenses').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,serverOnly:force,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
   }
   async function loadMovementsForJourney(jornadaId,{force=false}={}){
     jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
@@ -288,7 +306,7 @@ const Store = (() => {
     jornadaId=String(jornadaId||'').trim();if(!jornadaId)return{ok:false,error:'Jornada inválida'};
     const key='cashMovementsJourney:'+jornadaId;
     if(force)delete loadedAt[key];
-    return fetchInto('cashMovements',db.collection('cashMovements').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
+    return fetchInto('cashMovements',db.collection('cashMovements').where('jornadaId','==',jornadaId),{cacheKey:key,ttl:force?0:300000,serverOnly:force,predicate:x=>x.jornadaId===jornadaId||x.cajaId===jornadaId});
   }
   async function loadJourneyDetail(jornadaId,{force=false}={}){
     jornadaId=String(jornadaId||'').trim();const u=state.currentUser;
@@ -344,7 +362,7 @@ const Store = (() => {
     profilePromise=(async()=>{const d=await db.collection('users').doc(uid).get();trackUsage('reads',1,d.exists?[{id:d.id,...d.data()}]:[]);return d.exists?normalizeUser({id:uid,...d.data()}):null;})();
     try{return await profilePromise;}finally{profilePromise=null;}
   }
-  function stop(){Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; liveBusinessDate=null; validatedCashId=null;}
+  function stop(){pendingFetches.clear();Object.values(refs).forEach(f=>f&&f()); Object.keys(refs).forEach(k=>delete refs[k]); Object.keys(loadedAt).forEach(k=>delete loadedAt[k]); coreLoadedFor=null; liveBusinessDate=null; validatedCashId=null;}
   async function load(){ return new Promise(resolve=>fbAuth.onAuthStateChanged(async u=>{ if(!u){state.currentUser=null;stop();resolve();return;} const profile=await loadProfile(u.uid); if(!profile){await fbAuth.signOut();resolve();return;} state.currentUser=profile; if(!isActive(state.currentUser)){await fbAuth.signOut();state.currentUser=null;resolve();return;} await loadData(); resolve(); })); }
   async function login(email,password){try{const c=await fbAuth.signInWithEmailAndPassword(email,password);const profile=await loadProfile(c.user.uid);if(!profile||!isActive(profile)){await fbAuth.signOut();return{ok:false,error:'Usuario inactivo o sin perfil'}}state.currentUser=profile;await loadData();return{ok:true,user:state.currentUser}}catch(e){return{ok:false,error:'Correo o contraseña incorrectos'}}}
   async function logout(){stop();state.users=[];state.categories=[];state.products=[];state.sales=[];state.movements=[];state.expenses=[];state.cashSessions=[];state.jornadas=[];state.cashMovements=[];state.audits=[];state.cart=[];state.currentUser=null;await fbAuth.signOut()}
@@ -921,7 +939,7 @@ const Store = (() => {
 
   async function closeCash(real){
     real=Number(real);
-    if(!Number.isFinite(real)||real<0)return{ok:false,error:'Efectivo real inválido'};
+    if(!Number.isFinite(real)||real<0||real>1e9)return{ok:false,error:'Efectivo real inválido'};
     const u=state.currentUser,c=getOpenCash(u?.id);
     if(!c)return{ok:false,error:'No hay una jornada abierta'};
     const jornada=getOpenJourney(u.id)||await ensureJourneyForOpenCash(c);
@@ -969,9 +987,10 @@ const Store = (() => {
         const [snap,jSnap,lockSnap]=await Promise.all([tx.get(ref),tx.get(journeyRef),tx.get(lockRef)]);
         if(!snap.exists||snap.data().estado!=='Abierta')throw Error('La caja de esta jornada ya no está abierta');
         if(!jSnap.exists||jSnap.data().estado!=='Abierta')throw Error('La jornada ya no está abierta');
+        if(!lockSnap.exists||lockSnap.data().cajaId!==c.id||lockSnap.data().estado!=='Abierta')throw Error('El bloqueo de caja no coincide; se canceló el cierre por seguridad');
         tx.update(ref,closeSummary);
         tx.update(journeyRef,journeySummary);
-        if(lockSnap.exists && lockSnap.data().cajaId===c.id)tx.delete(lockRef);
+        tx.delete(lockRef);
       });
       const local=state.cashSessions.find(x=>x.id===c.id);if(local)Object.assign(local,closeSummary,{closedAt:new Date()});
       const localJ=state.jornadas.find(x=>x.id===jornada.id);if(localJ)Object.assign(localJ,journeySummary,{closedAt:new Date()});

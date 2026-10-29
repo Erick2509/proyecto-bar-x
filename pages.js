@@ -1064,7 +1064,7 @@ const Pages = {
       <div class="sales-layout">
         <div>
           <div class="toolbar">
-            <input type="search" class="search-input" id="sale-search" placeholder="Buscar producto..." oninput="Pages.filterSaleProducts()" style="max-width:100%" />
+            <input type="search" class="search-input" id="sale-search" placeholder="Buscar por nombre, categoría o código..." autocomplete="off" oninput="Pages.filterSaleProducts()" style="max-width:100%" />
           </div>
           <div class="product-grid" id="sale-products">
             ${products.map(p => this._saleProductCard(p)).join('') || Components.empty('📦', 'No hay productos disponibles')}
@@ -1122,8 +1122,10 @@ const Pages = {
     `;
   },
   filterSaleProducts() {
-    const q = (document.getElementById('sale-search')?.value || '').toLowerCase();
-    const products = Store.state.products.filter(p => p.estado === 'Activo' && (!q || p.nombre.toLowerCase().includes(q)));
+    const q = (document.getElementById('sale-search')?.value || '');
+    const norm = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+    const needle = norm(q.trim());
+    const products = Store.state.products.filter(p => p.estado === 'Activo' && (!needle || [p.nombre, p.codigo, p.sku, p.codigoBarras, Store.getCategory(p.categoriaId)?.nombre].some(v => norm(v).includes(needle))));
     const grid = document.getElementById('sale-products');
     if (grid) grid.innerHTML = products.map(p => this._saleProductCard(p)).join('') || Components.empty('📦', 'Sin resultados');
   },
@@ -1157,7 +1159,10 @@ const Pages = {
   _refreshCartUI() {
     // Re-render only the sales page if we are on it
     if (Router.current === 'ventas') {
+      const previousSearch = document.getElementById('sale-search')?.value || '';
       document.getElementById('main-content').innerHTML = this.ventas();
+      const search = document.getElementById('sale-search');
+      if (search && previousSearch) { search.value = previousSearch; this.filterSaleProducts(); }
     }
   },
   openPago() {
@@ -1750,6 +1755,24 @@ const Pages = {
           <div class="ux-opt-list"><span>✓ Productos en tiempo real</span><span>✓ Ventas solo del día en tiempo real</span><span>✓ Historiales bajo demanda</span><span>✓ Consultas históricas limitadas</span><span>✓ Caché persistente en el dispositivo</span><span>✓ Cierre de caja reutiliza datos ya cargados</span></div>
           <p class="text-muted mt-3 mb-0">La app mantiene carga diferida, límites en historiales y persistencia local para trabajar de forma eficiente.</p>
         </div></div>
+      </div>
+      <div class="card p-3 mt-3" id="backup-manager">
+        <h3>🗄️ Copias de seguridad · ZIP único</h3>
+        <p class="text-muted">Descarga un solo ZIP de Firestore. Para restaurar documentos faltantes, comprueba la contraseña del administrador y procesa por lotes pequeños. El avance se guarda localmente; si se cierra el navegador, importa de nuevo el mismo ZIP para continuar.</p>
+        <button class="btn btn-secondary" onclick="BackupManager.measure()">1. Calcular respaldo</button>
+        <p class="ux-help mt-2" id="backup-estimate">Consulta el tamaño antes de descargar. Las lecturas consumen cuota de Firestore.</p>
+        <button class="btn btn-primary mt-1" onclick="BackupManager.exportParts()">2. Descargar ZIP único</button>
+        <hr><h5>🔐 Restaurar documentos faltantes</h5>
+        <p class="text-muted">Solo recupera documentos que no existan. No reemplaza toda la base de datos ni restaura Authentication. Suspende las operaciones del bar antes de comenzar.</p>
+        <div class="row g-2"><div class="col-12 col-md-6"><input id="backup-password" type="password" class="form-control" autocomplete="current-password" placeholder="Contraseña del administrador"></div>
+        <div class="col-12 col-md-6"><button class="btn btn-secondary" onclick="BackupManager.access()">Verificar contraseña y acceder</button></div></div>
+        <div id="backup-import-panel" hidden class="mt-3"><label class="form-label" for="backup-zip-input">Selecciona el ZIP de respaldo</label>
+          <input class="form-control" id="backup-zip-input" type="file" accept=".zip,application/zip" onchange="BackupManager.addPart(this)">
+          <div id="backup-restore-controls" hidden class="mt-2"><p id="backup-restore-summary"></p><button class="btn btn-danger" onclick="BackupManager.restoreMissing()">Recuperar documentos faltantes / continuar</button></div>
+        </div>
+        <div class="mt-3" id="backup-progress" aria-live="polite"></div>
+        <p class="ux-help mt-2" id="backup-status" aria-live="polite">Sin operación en curso.</p>
+        <p class="text-muted small">La cuota gratuita diaria es compartida con el bar. El navegador no conoce la cuota exacta restante. Si se pausa, se conserva el cursor localmente y se requiere volver a abrir el sistema e importar el ZIP. No borres el almacenamiento del navegador antes de terminar.</p>
       </div>
       <div class="card reset-card mt-3">
         <div class="reset-card-main"><div class="reset-icon">♻️</div><div><h3>Reinicio del sistema</h3><p>Borra ventas, cajas, gastos, movimientos, productos, categorías, archivos eliminados, auditoría y perfiles de empleados. <strong>Conserva al administrador conectado</strong> para que no pierdas el acceso.</p></div></div>

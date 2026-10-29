@@ -1,7 +1,7 @@
-const CACHE = 'proyecto-x-v37';
+const CACHE = 'proyecto-x-v40';
 const ASSETS = [
   './','./index.html','./styles.css','./app.js','./pages.js','./store.js','./auth.js',
-  './utils.js','./components.js','./firebase-config.js','./manifest.webmanifest',
+  './utils.js','./components.js','./backup.js','./firebase-config.js','./manifest.webmanifest',
   './logo-proyecto-x.png','./icon-192.png','./icon-512.png','./favicon.ico'
 ];
 

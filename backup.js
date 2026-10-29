@@ -1,11 +1,11 @@
-/* ProyectoBarX v40: ZIP único y recuperación de documentos ausentes (NO restauración total). */
+/* ProyectoBarX v41: recuperación reanudable con diagnóstico, reintentos y verificación. NO restauración total. */
 const BackupManager = (() => {
   const COLLECTIONS=['users','categories','products','deletedProducts','deletedCategories','sales','expenses','deletedExpenses','expenseRevisions','movements','cashSessions','jornadas','cashMovements','cashLocks','audits'];
   const encoder=new TextEncoder();
   const BUDGET=5000; // máximo preventivo por día local, no indica cuota disponible
   let draft=null, imported=null, authorizedAt=0, busy=false;
   const status=(s,error=false)=>{const e=document.getElementById('backup-status');if(e){e.textContent=s;e.style.color=error?'#dc3545':'';}};
-  const progress=(n,total,label)=>{const v=total?Math.floor(n*100/total):0;const e=document.getElementById('backup-progress');if(e){e.textContent=`${label}: ${v}% (${n.toLocaleString('es-PE')}/${total.toLocaleString('es-PE')})`;const bar=document.createElement('div');bar.className='progress';bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuenow',String(v));bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');const inner=document.createElement('div');inner.className='progress-bar';inner.style.width=v+'%';bar.append(inner);e.append(bar);}};
+  const progress=(n,total,label)=>{const v=total?Math.floor(n*100/total):0;const e=document.getElementById('backup-progress');if(e){e.replaceChildren();e.textContent=`${label}: ${v}% (${n.toLocaleString('es-PE')}/${total.toLocaleString('es-PE')})`;const bar=document.createElement('div');bar.className='progress';bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuenow',String(v));bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');const inner=document.createElement('div');inner.className='progress-bar';inner.style.width=v+'%';bar.append(inner);e.append(bar);}};
   const assertAdmin=()=>{if(!Auth.isAdmin()||!fbAuth.currentUser||fbAuth.currentUser.uid!==Auth.currentUser()?.id)throw Error('Requiere una cuenta de administrador autenticada.');};
   const assertZip=()=>{if(typeof JSZip==='undefined')throw Error('No se ha cargado JSZip.');};
   const permit=()=>{assertAdmin();if(Date.now()-authorizedAt>10*60*1000)throw Error('La autorización caducó. Vuelve a verificar la contraseña.');};
@@ -22,15 +22,65 @@ const BackupManager = (() => {
   async function access(){try{assertAdmin();const input=document.getElementById('backup-password');const user=fbAuth.currentUser;if(!user.email)throw Error('Necesitas una cuenta Firebase con correo y contraseña.');if(!input?.value)throw Error('Introduce la contraseña.');await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email,input.value));input.value='';authorizedAt=Date.now();document.getElementById('backup-import-panel').hidden=false;status('Identidad verificada. Selecciona el ZIP.');}catch(e){status('Acceso denegado: '+e.message,true);}}
   async function addPart(input){try{permit();assertZip();const file=input?.files?.[0];if(!file)return;if(busy)throw Error('Operación en curso.');busy=true;const zip=await JSZip.loadAsync(file);if(!zip.file('manifest.json')||!zip.file('documents.json'))throw Error('ZIP no reconocido.');const manifest=JSON.parse(await zip.file('manifest.json').async('text'));if(manifest.format!=='barx-single-v2'||manifest.projectId!==firebaseConfig.projectId)throw Error('Formato o proyecto Firebase incorrecto.');const payload=await zip.file('documents.json').async('text');if(await hash(payload)!==manifest.sha256)throw Error('La copia no supera la verificación SHA-256.');const docs=JSON.parse(payload);if(!Array.isArray(docs)||docs.length!==manifest.documentCount)throw Error('Cantidad de documentos inválida.');const seen=new Set();for(const d of docs){if(!d||!COLLECTIONS.includes(d.collection)||typeof d.id!=='string'||!d.id||d.id.includes('/')||!d.data||typeof d.data!=='object'||Array.isArray(d.data))throw Error('Documento inválido.');const key=d.collection+'/'+d.id;if(seen.has(key))throw Error('Documento duplicado: '+key);seen.add(key);}imported={manifest,docs};const saved=JSON.parse(localStorage.getItem(progressKey(manifest.backupId))||'null');const index=saved?.hash===manifest.sha256?Math.min(saved.index||0,docs.length):0;document.getElementById('backup-restore-controls').hidden=false;document.getElementById('backup-restore-summary').textContent=`${docs.length} documentos válidos. ${index} ya procesados en una sesión anterior. Se omitirán existentes; NO se sobrescribe la base completa.`;progress(index,docs.length,'Listo para recuperar');status('ZIP validado. Comprueba los datos antes de continuar.');}catch(e){status('No se pudo importar: '+e.message,true);}finally{busy=false;if(input)input.value='';}}
   function pacificDay(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
-  async function restoreMissing(){try{permit();if(!imported)throw Error('Importa el ZIP primero.');if(busy)throw Error('Ya existe una restauración activa.');if(!confirm('¿Recuperar SOLO los documentos faltantes? Detén previamente las ventas y crea un respaldo actual. No es una restauración total.'))return;busy=true;const {docs,manifest}=imported;const key=progressKey(manifest.backupId);let checkpoint=JSON.parse(localStorage.getItem(key)||'null');if(!checkpoint||checkpoint.hash!==manifest.sha256)checkpoint={hash:manifest.sha256,index:0,day:pacificDay(),attempts:0};if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
-    let created=0,already=0;while(checkpoint.index<docs.length){permit();if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}if(checkpoint.attempts>=BUDGET){status('PAUSADO: presupuesto preventivo diario de '+BUDGET+' documentos alcanzado. Vuelve cuando se renueve el día del Pacífico e importa el mismo ZIP.');break;}
-      const d=docs[checkpoint.index],ref=db.collection(d.collection).doc(d.id);
-      try{const existing=await ref.get({source:'server'});if(existing.exists){already++;}else{await ref.set(revive(d.data));created++;}checkpoint.index++;checkpoint.attempts++;localStorage.setItem(key,JSON.stringify(checkpoint));}
-      catch(e){localStorage.setItem(key,JSON.stringify(checkpoint));status('PAUSADO por error (no se avanza el cursor): '+e.message+'. Corrige el problema antes de reintentar. No se asume que sea cuota.',true);break;}
-      if(checkpoint.index%10===0||checkpoint.index===docs.length)progress(checkpoint.index,docs.length,'Restauración');
+  const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const codeOf=e=>String(e?.code||'').replace(/^firestore\//,'').toLowerCase();
+  const isTransient=e=>['unavailable','deadline-exceeded','aborted','internal','unknown'].includes(codeOf(e)) || /network|transport|connection|quic|timeout/i.test(String(e?.message||''));
+  const details=(e,d)=>`${d.collection}/${d.id} — ${e?.code||'sin-código'}: ${e?.message||String(e)}`;
+  async function serverGet(ref){return ref.get({source:'server'});}
+  async function withRetry(operation,d){let error;for(let attempt=0;attempt<4;attempt++){try{return await operation();}catch(e){error=e;if(!isTransient(e)||attempt===3)break;status(`Problema temporal en ${d.collection}/${d.id}. Reintento ${attempt+1}/3: ${e.code||e.message}` ,true);await sleep(Math.min(8000,650*2**attempt)+Math.floor(Math.random()*200));}}throw error;}
+  // Escritos con ID fijo: repetir un set con los mismos datos no crea documentos duplicados.
+  // Solo se avanza tras confirmar el estado del servidor. Ante respuesta ambigua,
+  // el reintento empieza por leer el documento antes de volver a escribirlo.
+  async function restoreOne(d){const ref=db.collection(d.collection).doc(d.id);const current=await withRetry(()=>serverGet(ref),d);if(current.exists)return 'existing';
+    try{await withRetry(()=>ref.set(revive(d.data)),d);}catch(e){
+      // La escritura pudo haberse completado en el servidor y perderse la respuesta.
+      const check=await withRetry(()=>serverGet(ref),d);
+      if(!check.exists)throw e;
     }
-    progress(checkpoint.index,docs.length,'Restauración');if(checkpoint.index===docs.length){status(`Procesamiento completo: ${created} recuperados en esta ejecución, ${already} ya existentes. Es necesaria validación de relaciones y datos antes de declarar una restauración total.`);localStorage.removeItem(key);}else status(`Pausada en ${checkpoint.index}/${docs.length}. Guarda el ZIP y conserva los datos del navegador. Vuelve a identificarte e impórtalo para continuar.`);
-  }catch(e){status('No se pudo continuar: '+e.message,true);}finally{busy=false;}}
+    const verified=await withRetry(()=>serverGet(ref),d);
+    if(!verified.exists)throw Error('No se pudo confirmar la escritura en Firestore.');
+    return 'created';
+  }
+  async function restoreMissing(){
+    let stoppedReason=null;
+    try{
+      permit();if(!imported)throw Error('Importa el ZIP primero.');if(busy)throw Error('Ya existe una restauración activa.');
+      if(!confirm('¿Recuperar SOLO los documentos faltantes? Detén previamente las ventas y crea un respaldo actual. No es una restauración total.'))return;
+      busy=true;const {docs,manifest}=imported;const key=progressKey(manifest.backupId);
+      let checkpoint=JSON.parse(localStorage.getItem(key)||'null');
+      if(!checkpoint||checkpoint.hash!==manifest.sha256)checkpoint={hash:manifest.sha256,index:0,day:pacificDay(),attempts:0};
+      if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
+      checkpoint.lastError=null;
+      let created=0,already=0;
+      while(checkpoint.index<docs.length){
+        try{permit();}catch(e){stoppedReason='Autorización: '+e.message;break;}
+        if(checkpoint.day!==pacificDay()){checkpoint.day=pacificDay();checkpoint.attempts=0;}
+        if(checkpoint.attempts>=BUDGET){stoppedReason='Presupuesto preventivo diario de '+BUDGET+' documentos alcanzado. Puedes continuar cuando se renueve el día del Pacífico.';break;}
+        const d=docs[checkpoint.index];
+        try{
+          const outcome=await restoreOne(d);
+          if(outcome==='created')created++;else already++;
+          checkpoint.index++;checkpoint.attempts++;
+          checkpoint.lastError=null;
+          localStorage.setItem(key,JSON.stringify(checkpoint));
+        }catch(e){
+          stoppedReason=details(e,d);
+          checkpoint.lastError={collection:d.collection,id:d.id,code:e?.code||'unknown',message:String(e?.message||e),at:new Date().toISOString()};
+          localStorage.setItem(key,JSON.stringify(checkpoint));
+          break;
+        }
+        if(checkpoint.index%5===0||checkpoint.index===docs.length)progress(checkpoint.index,docs.length,'Restauración');
+      }
+      progress(checkpoint.index,docs.length,'Restauración');
+      if(checkpoint.index===docs.length){
+        status(`Procesamiento terminado: ${created} recuperados y confirmados en esta ejecución, ${already} ya existentes. Verifica relaciones y registros antes de considerarlo restauración completa.`);
+        localStorage.removeItem(key);
+      }else{
+        status(`PAUSADA en ${checkpoint.index}/${docs.length}. CAUSA: ${stoppedReason||'no identificada'}. Archivo y progreso preservados; vuelve a identificarte, importa el mismo ZIP y continúa.`,true);
+      }
+    }catch(e){status('No se pudo continuar: '+(e.code||'')+' '+e.message,true);}
+    finally{busy=false;}
+  }
   function resetImport(){if(busy)return;imported=null;authorizedAt=0;const e=document.getElementById('backup-import-panel');if(e)e.hidden=true;const c=document.getElementById('backup-restore-controls');if(c)c.hidden=true;status('Sesión de importación cerrada. Los checkpoints locales no se eliminan.');}
   return {measure,renderInfo,exportParts,access,addPart,restoreMissing,resetImport};
 })();

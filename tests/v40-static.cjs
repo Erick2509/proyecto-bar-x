@@ -9,5 +9,5 @@ for(const [name,condition] of [
  ['contraseña Firebase',backup.includes('reauthenticateWithCredential')],
  ['buscador por categoría',pages.includes('Store.getCategory(p.categoriaId)?.nombre')],
  ['búsqueda conservada en carrito',pages.includes('previousSearch')],
- ['nueva caché',read('sw.js').includes('proyecto-x-v40')]
+ ['nueva caché',read('sw.js').includes('proyecto-x-v41')]
 ]){assert.ok(condition,name);console.log('PASS '+name)}

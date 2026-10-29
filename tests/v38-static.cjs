@@ -10,7 +10,7 @@ const checks=[
  ['bloqueo de caja validado',store.includes("lockSnap.data().estado!=='Abierta'")],
  ['archivo de gastos editados',store.includes("collection('expenseRevisions')")],
  ['archivo de gastos eliminados',store.includes("collection('deletedExpenses')")],
- ['versión caché',fs.readFileSync(path.join(root,'sw.js'),'utf8').includes('proyecto-x-v40')]
+ ['versión caché',fs.readFileSync(path.join(root,'sw.js'),'utf8').includes('proyecto-x-v41')]
 ];
 for(const [name,ok] of checks){assert.ok(ok,name);process.stdout.write('PASS '+name+'\n');}
 console.log('PASS sintaxis de JavaScript');

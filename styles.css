@@ -1423,3 +1423,10 @@ select option { background:#1c1a16; color:#f7f3ed; }
 @media(prefers-reduced-motion:reduce){.report-metric{transition:none}.report-metric:hover{transform:none}}
 
 .barx-restore-collections{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}.barx-restore-row{background:#1e211e;padding:10px;border:1px solid #343b35;border-radius:10px;font-size:13px}.barx-restore-row .progress{margin-top:7px;height:7px}
+
+/* v46: acción de exportación siempre visible en una fila propia */
+.report-export-actions{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.report-export-main{min-height:44px;padding:10px 18px;font-weight:750;flex:0 0 auto}
+.report-export-main:disabled{opacity:.55;cursor:not-allowed}
+.report-export-help{font-size:12px;color:var(--text-muted,#aaa);flex:1 1 260px;line-height:1.5}
+@media(max-width:600px){.report-export-actions{flex-direction:column;align-items:stretch}.report-export-main{width:100%}}

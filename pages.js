@@ -1635,6 +1635,7 @@ const Pages = {
 
   _reportRange: null,
   _reportBusy: false,
+  _reportExportReady: false,
   _reportDefaultRange() { return { desde: Store.daysAgo(30), hasta: Store.today() }; },
   _reportTotals(desde, hasta) {
     const sales = Store.state.sales.filter(s => s.estado !== 'Anulada' && s.fecha >= desde && s.fecha <= hasta);
@@ -1667,10 +1668,15 @@ const Pages = {
       <div class="page-header"><div><h1 class="page-title">📈 Reportes</h1><p class="ux-page-sub">Consulta los totales del negocio por fecha y método de pago.</p></div></div>
       <section class="report-filter" aria-label="Filtro de fechas">
         <div class="report-filter-title"><span>📅</span><div><strong>Rango de fechas</strong><small>Los totales se actualizan según el periodo seleccionado.</small></div></div>
-        <div class="report-filter-fields"><label>Desde<input id="report-from" class="form-control" type="date" value="${safeDate(desde)}"></label>
-        <label>Hasta<input id="report-to" class="form-control" type="date" value="${safeDate(hasta)}"></label>
+        <div class="report-filter-fields"><label>Desde<input id="report-from" class="form-control" type="date" onchange="Pages._reportExportReady=false;document.getElementById('report-export').disabled=true" value="${safeDate(desde)}"></label>
+        <label>Hasta<input id="report-to" class="form-control" type="date" onchange="Pages._reportExportReady=false;document.getElementById('report-export').disabled=true" value="${safeDate(hasta)}"></label>
         <button id="report-apply" class="btn btn-primary" type="button" onclick="Pages.applyReportRange()">Aplicar filtro</button>
-        <button class="btn btn-secondary" type="button" onclick="Pages.resetReportRange()">Últimos 31 días</button></div>
+        <button class="btn btn-secondary" type="button" onclick="Pages.resetReportRange()">Últimos 31 días</button>
+        </div>
+        <div class="report-export-actions">
+          <button id="report-export" class="btn btn-success report-export-main" type="button" onclick="Pages.exportReportExcel()" disabled>📥 Descargar Excel (5 hojas)</button>
+          <span class="report-export-help">Aplica el rango de fechas para habilitar la descarga. Se exportan Resumen, Ventas, Gastos, Métodos de pago y Productos vendidos.</span>
+        </div>
         <div id="report-filter-status" class="report-filter-status" role="status" aria-live="polite">Mostrando ${safeDate(desde)} al ${safeDate(hasta)}</div>
       </section>
       <div id="report-cards" class="report-metrics" aria-live="polite">${this._reportCards(desde,hasta)}</div>
@@ -1682,6 +1688,7 @@ const Pages = {
     const desde=document.getElementById('report-from')?.value;
     const hasta=document.getElementById('report-to')?.value;
     const status=document.getElementById('report-filter-status');
+    this._reportExportReady=false;const exportBtn=document.getElementById('report-export');if(exportBtn)exportBtn.disabled=true;
     const valid=x=>/^\d{4}-\d{2}-\d{2}$/.test(x)&&!Number.isNaN(Date.parse(x+'T12:00:00Z'));
     if(!valid(desde)||!valid(hasta)||desde>hasta){Toast.show('Selecciona un rango de fechas válido','error');return;}
     // Evitar consultas de años completos por accidente en el plan gratuito.
@@ -1695,10 +1702,99 @@ const Pages = {
       const fail=results.find(x=>!x?.ok);
       if(fail){if(status)status.textContent='No se pudieron cargar todos los datos. Se mantienen los totales anteriores.';Toast.show(fail.error||'Error consultando reportes','error');return;}
       this._reportRange={desde,hasta};
+      this._reportExportReady=true; if(exportBtn)exportBtn.disabled=false;
       const cards=document.getElementById('report-cards');if(cards)cards.innerHTML=this._reportCards(desde,hasta);
       if(status)status.textContent=`Mostrando ${desde} al ${hasta}`;
     }catch(e){if(status)status.textContent='Error al actualizar el reporte';Toast.show(e.message||'Error al cargar reporte','error');}
     finally{this._reportBusy=false;if(btn){btn.disabled=false;btn.textContent='Aplicar filtro';}}
+  },
+  async exportReportExcel(){
+    if(!Auth.requireAdmin())return;
+    if(this._reportBusy||!this._reportExportReady){Toast.show('Primero aplica el filtro y espera a que termine de cargar','error');return;}
+    if(typeof XLSX==='undefined'){Toast.show('No se cargó el generador Excel. Comprueba tu conexión','error');return;}
+    const {desde,hasta}=this._reportRange||{};
+    if(!desde||!hasta){Toast.show('Selecciona y aplica un periodo','error');return;}
+    const sales=Store.state.sales.filter(s=>s.estado!=='Anulada'&&s.fecha>=desde&&s.fecha<=hasta);
+    const expenses=Store.state.expenses.filter(e=>e.estado!=='Anulado'&&e.fecha>=desde&&e.fecha<=hasta);
+    const totals=this._reportTotals(desde,hasta);
+    const safe=v=>{const x=String(v??'');return /^[=+@\-\t\r\n]/.test(x)?"'"+x:x;};
+    const money=v=>Math.round((Number(v)||0)*100)/100;
+    const date=v=>safe(v||'');
+    const payments=[];
+    const products=[];
+    const prodAgg=new Map();
+    for(const s of sales){
+      for(const pay of Store.getSalePayments(s))payments.push([date(s.fecha),safe(s.numero||s.id),safe(s.empleadoNombre||''),safe(pay.metodo),money(pay.monto)]);
+      for(const it of (Array.isArray(s.items)?s.items:[])){
+        const id=String(it.productoId||it.id||'');
+        const product=Store.getProduct(id);
+        const name=safe(it.nombre||product?.nombre||'Producto sin nombre');
+        const category=safe(it.categoria||Store.getCategory(product?.categoriaId)?.nombre||product?.categoria||'');
+        const qty=Number(it.cantidad)||0;
+        const price=money(it.precioUnitario);
+        const amount=money(it.subtotal??qty*price);
+        products.push([date(s.fecha),safe(s.numero||s.id),name,category,qty,price,amount]);
+        const key=id||name;
+        const agg=prodAgg.get(key)||{name,category,qty:0,amount:0};agg.qty+=qty;agg.amount+=amount;prodAgg.set(key,agg);
+      }
+    }
+    const wb=XLSX.utils.book_new();
+    const palette={dark:'163129',green:'167B55',light:'E9F5EE',white:'FFFFFF',grey:'64748B',ink:'17352B'};
+    const header=(n)=>({font:{bold:true,color:{rgb:palette.white},sz:11},fill:{fgColor:{rgb:palette.green}},alignment:{vertical:'center',wrapText:true},border:{bottom:{style:'thin',color:{rgb:'DDE9E2'}}}});
+    const makeSheet=(name,rows,widths,moneyCols=[],numCols=[],opt={})=>{
+      const ws=XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols']=widths.map(w=>({wch:w}));
+      const head=opt.headerRow??0;
+      ws['!rows']=Array.from({length:Math.max(rows.length,head+1)},(_,i)=>({hpt:i===head?29:(i===0&&opt.summary?36:23)}));
+      ws['!autofilter']=opt.summary?undefined:{ref:XLSX.utils.encode_range({s:{r:head,c:0},e:{r:Math.max(head,rows.length-1),c:widths.length-1}})};
+      ws['!freeze']={xSplit:0,ySplit:head+1};
+      for(let c=0;c<widths.length;c++){
+        const ref=XLSX.utils.encode_cell({r:head,c});
+        if(ws[ref])ws[ref].s=header(c);
+      }
+      for(let r=head+1;r<rows.length;r++)for(let c=0;c<widths.length;c++){
+        const ref=XLSX.utils.encode_cell({r,c});if(!ws[ref])continue;
+        if(moneyCols.includes(c)&&ws[ref].t==='n')ws[ref].z='"S/ "#,##0.00;[Red]("S/ "#,##0.00)';
+        if(numCols.includes(c)&&ws[ref].t==='n')ws[ref].z='#,##0.##';
+        ws[ref].s={font:{name:'Aptos',sz:10,color:{rgb:palette.ink}},fill:{fgColor:{rgb:r%2===0?'F2F8F4':'FFFFFF'}},alignment:{vertical:'center'}};
+      }
+      XLSX.utils.book_append_sheet(wb,ws,name);
+      return ws;
+    };
+    const summary=[
+      ['PROYECTOBARX | REPORTE GENERAL'],
+      ['Periodo',desde,'al',hasta],
+      ['Generado',new Date().toLocaleString('es-PE')],
+      [],
+      ['INDICADOR','TOTAL'],
+      ['Ventas',money(totals.ventas)],['Gastos',money(totals.gastos)],
+      ['Saldo operativo (ventas - gastos)',money(totals.ventas-totals.gastos)],
+      ['Efectivo',money(totals.pagos.Efectivo)],['Yape',money(totals.pagos.Yape)],
+      ['Plin',money(totals.pagos.Plin)],['Tarjeta',money(totals.pagos.Tarjeta)],
+      ['N° de ventas',sales.length],['N° de gastos',expenses.length],
+      [],['CONTROL DE COBROS','TOTAL'],
+      ['Suma de medios de pago',money(totals.pagos.Efectivo+totals.pagos.Yape+totals.pagos.Plin+totals.pagos.Tarjeta)],
+      ['Diferencia con ventas',money(totals.ventas-(totals.pagos.Efectivo+totals.pagos.Yape+totals.pagos.Plin+totals.pagos.Tarjeta))],
+      [],['OBSERVACIONES'],
+      ['Solo se exportan ventas y gastos no anulados del periodo seleccionado.'],
+      ['Efectivo refleja cobros por ventas, no ingresos/retiros de caja.'],
+      ['Saldo operativo no equivale a utilidad neta.'],
+      ['Las ventas con pagos divididos aparecen por método en la hoja Métodos de pago.']
+    ];
+    const sws=makeSheet('Resumen',summary,[46,24,16,23],[1],[],{summary:true,headerRow:4});
+    sws['!merges']=[{s:{r:0,c:0},e:{r:0,c:3}},{s:{r:19,c:0},e:{r:19,c:3}}];
+    if(sws.A1)sws.A1.s={font:{bold:true,sz:20,color:{rgb:palette.white}},fill:{fgColor:{rgb:palette.dark}},alignment:{vertical:'center'}};
+    for(const r of [15,19]){const ref='A'+(r+1);if(sws[ref])sws[ref].s={font:{bold:true,color:{rgb:palette.white}},fill:{fgColor:{rgb:palette.dark}}};}
+    for(let r=5;r<=17;r++){const cell=sws['B'+(r+1)];if(cell&&cell.t==='n'&&r!==12&&r!==13)cell.z='"S/ "#,##0.00';}
+    const saleRows=[['Fecha','Hora','N° venta','Empleado','Jornada','Estado','Método de pago','Total (S/)'],...sales.map(s=>[date(s.fecha),safe(s.hora),safe(s.numero||s.id),safe(s.empleadoNombre),safe(s.jornadaId||s.cajaId),safe(s.estado),safe(Store.salePaymentLabel(s)),money(s.total)])];
+    const expenseRows=[['Fecha','Hora','Concepto','Categoría','Origen','Método de pago','Jornada','Importe (S/)'],...expenses.map(e=>[date(e.fecha),safe(e.hora),safe(e.concepto),safe(e.categoria),safe(e.origen),safe(e.metodoPago),safe(e.jornadaId||e.cajaId),money(e.monto)])];
+    makeSheet('Ventas',saleRows,[15,12,23,27,26,17,25,19],[7]);
+    makeSheet('Gastos',expenseRows,[15,12,42,24,22,22,26,19],[7]);
+    makeSheet('Métodos de pago',[['Fecha','N° venta','Empleado','Método','Importe (S/)'],...payments],[15,25,28,20,19],[4]);
+    const byProduct=[...prodAgg.values()].sort((a,b)=>b.amount-a.amount);
+    makeSheet('Productos vendidos',[['Producto','Categoría','Unidades vendidas','Ingresos (S/)'],...byProduct.map(a=>[a.name,a.category,a.qty,money(a.amount)])],[39,27,23,21],[3],[2]);
+    try{XLSX.writeFile(wb,`ProyectoBarX_Reporte_${desde}_al_${hasta}.xlsx`,{compression:true});Toast.show('Reporte Excel descargado','success');}
+    catch(e){Toast.show('No se pudo generar el Excel: '+(e.message||e),'error');}
   },
   async resetReportRange(){
     const d=this._reportDefaultRange();

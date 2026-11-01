@@ -1430,3 +1430,11 @@ select option { background:#1c1a16; color:#f7f3ed; }
 .report-export-main:disabled{opacity:.55;cursor:not-allowed}
 .report-export-help{font-size:12px;color:var(--text-muted,#aaa);flex:1 1 260px;line-height:1.5}
 @media(max-width:600px){.report-export-actions{flex-direction:column;align-items:stretch}.report-export-main{width:100%}}
+
+/* v47: descuentos integrados al cobro */
+.ux-discount-box{margin-top:1rem;padding:1rem;border:1px solid var(--border,#403a32);border-radius:12px;background:rgba(255,193,7,.035)}
+.ux-discount-box h3{font-size:1rem;margin:0 0 .8rem;color:var(--text-primary,#f3eee8)}
+.ux-discount-box small{display:block;color:var(--text-secondary,#aaa);line-height:1.4}
+.ux-discount-summary{padding:.65rem 0;color:var(--amber,#e8b21a);font-weight:650;line-height:1.5}
+.ux-discount-error{color:#fb7185;font-size:.85rem;margin-bottom:.35rem}
+@media(max-width:520px){.ux-discount-box{padding:.75rem}.ux-discount-box .ux-split-row{grid-template-columns:1fr 1fr;gap:.5rem}}

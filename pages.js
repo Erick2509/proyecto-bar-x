@@ -34,11 +34,21 @@ const Pages = {
       return `<option value="${Utils.escapeHtml(j.id)}" ${selected===j.id?'selected':''}>${Utils.escapeHtml(label)}</option>`;
     }).join('');
   },
+  _saleDiscount(s){
+    const n=Number(s?.descuentoMonto||0);
+    return Number.isFinite(n)?Math.max(0,n):0;
+  },
+  _saleSubtotal(s){
+    const n=Number(s?.subtotal);
+    return Number.isFinite(n)?n:Number(s?.total||0)+this._saleDiscount(s);
+  },
   _journeyStats(j) {
-    if(!j)return{sales:[],expenses:[],cashMovements:[],pay:{Efectivo:0,Yape:0,Plin:0,Tarjeta:0},totalSales:0,totalExpenses:0,gastosEfectivo:0,ingresos:0,retiros:0,expected:0,duration:0};
+    if(!j)return{sales:[],expenses:[],cashMovements:[],pay:{Efectivo:0,Yape:0,Plin:0,Tarjeta:0},totalSales:0,totalDiscounts:0,totalSubtotal:0,totalExpenses:0,gastosEfectivo:0,ingresos:0,retiros:0,expected:0,duration:0};
     const sales=Store.state.sales.filter(x=>x.estado!=='Anulada'&&this._journeyMatches(x,j.id));
     const expenses=Store.state.expenses.filter(x=>this._journeyMatches(x,j.id));
     const cashMovements=Store.state.cashMovements.filter(x=>this._journeyMatches(x,j.id));
+    const totalDiscounts=+(sales.reduce((a,x)=>a+this._saleDiscount(x),0)).toFixed(2);
+    const totalSubtotal=+(sales.reduce((a,x)=>a+this._saleSubtotal(x),0)).toFixed(2);
     const calc=Store.paymentTotals(sales);
     const pay={
       Efectivo:j.estado==='Cerrada'&&j.efectivoVentas!=null?Number(j.efectivoVentas||0):calc.Efectivo,
@@ -54,7 +64,7 @@ const Pages = {
     const initial=Number(j.montoInicial||0);
     const expected=j.estado==='Cerrada'&&j.efectivoEsperado!=null?Number(j.efectivoEsperado||0):initial+pay.Efectivo+ingresos-retiros-gastosEfectivo;
     const duration=j.duracionMinutos!=null?Number(j.duracionMinutos||0):Store.journeyDurationMinutes(j);
-    return{sales,expenses,cashMovements,pay,totalSales:+totalSales.toFixed(2),totalExpenses:+totalExpenses.toFixed(2),gastosEfectivo:+gastosEfectivo.toFixed(2),ingresos:+ingresos.toFixed(2),retiros:+retiros.toFixed(2),expected:+expected.toFixed(2),duration};
+    return{sales,expenses,cashMovements,pay,totalDiscounts,totalSubtotal,totalSales:+totalSales.toFixed(2),totalExpenses:+totalExpenses.toFixed(2),gastosEfectivo:+gastosEfectivo.toFixed(2),ingresos:+ingresos.toFixed(2),retiros:+retiros.toFixed(2),expected:+expected.toFixed(2),duration};
   },
   selectJourneyFilter(kind) {
     const map={historial:['hist-journey','hist-from','hist-to',()=>this.filterHistorial(true)],gastos:['gasto-journey','gasto-from','gasto-to',()=>this.filterGastos(true)],movimientos:['mov-journey','mov-from','mov-to',()=>this.filterMovimientos(true)]};
@@ -484,7 +494,7 @@ const Pages = {
               <button class="btn btn-sm btn-primary" onclick="Pages.openAddStockForm('${p.id}')">+ Stock</button>
               <button class="btn btn-sm btn-secondary" onclick="Pages.openProductoForm('${p.id}')">Editar</button>
               <button class="btn btn-sm btn-danger" onclick="Pages.deleteProducto('${p.id}')">Eliminar</button>
-            `)).join('') || `<tr><td colspan="8">${Components.empty('📦', 'No hay productos registrados')}</td></tr>`}
+            `)).join('') || `<tr><td colspan="10">${Components.empty('📦', 'No hay productos registrados')}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1179,7 +1189,7 @@ const Pages = {
       <div class="modal-header"><h2>💰 Confirmar pago</h2><button class="btn-icon" onclick="Modal.close()">✕</button></div>
       <div class="modal-body">
         <p style="text-align:center;margin-bottom:0.5rem;color:var(--text-secondary)">Total a cobrar</p>
-        <p style="text-align:center;font-family:var(--font-serif);font-size:2rem;color:var(--amber);margin-bottom:1.25rem">${Utils.formatMoney(total)}</p>
+        <p id="pay-final-total" style="text-align:center;font-family:var(--font-serif);font-size:2rem;color:var(--amber);margin-bottom:1.25rem">${Utils.formatMoney(total)}</p>
         <div id="single-pay-area">
           <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.5rem">Método de pago</p>
           <div class="pay-methods">
@@ -1202,6 +1212,16 @@ const Pages = {
           </div>
           <div class="ux-split-check" id="split-check">✅ Las dos partes suman ${Utils.formatMoney(total)}</div>
         </div>
+        <div class="ux-discount-box">
+          <h3>🏷️ Aplicar descuento</h3>
+          <div class="ux-split-row">
+            <div class="form-group"><label>Tipo</label><select id="sale-discount-type" onchange="Pages.updateSaleDiscount()"><option value="amount">Soles (S/)</option><option value="percent">Porcentaje (%)</option></select></div>
+            <div class="form-group"><label>Descuento</label><input id="sale-discount-value" type="number" min="0" step="0.01" value="0" oninput="Pages.updateSaleDiscount()" /></div>
+          </div>
+          <div class="ux-discount-summary" id="sale-discount-summary">Subtotal: ${Utils.formatMoney(total)} · Descuento: S/ 0.00 · Total: ${Utils.formatMoney(total)}</div>
+          <div class="ux-discount-error" id="sale-discount-error" role="alert" aria-live="polite"></div>
+          <small>Descuentos mayores al 20% requieren administrador. Se guardarán en la venta y sus reportes.</small>
+        </div>
       </div>
       <div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-amber" id="btn-confirm-pay" onclick="Pages.confirmPago()">💳 Confirmar pago</button></div>
     `);
@@ -1217,8 +1237,34 @@ const Pages = {
     if(btn)btn.textContent=enabling?'↩️ Usar un solo método':'➗ Pago por separado';
     if(enabling)this.updateSplitPayment();
   },
+  readSaleDiscount() {
+    const subtotal=+Store.getCartTotal().toFixed(2);
+    const type=document.getElementById('sale-discount-type')?.value||'amount';
+    const raw=Number(document.getElementById('sale-discount-value')?.value||0);
+    const valid=Number.isFinite(raw)&&raw>=0&&((type==='percent'&&raw<=100)||(type==='amount'&&raw<=subtotal));
+    const cents=valid?Math.round((type==='percent'?subtotal*raw/100:raw)*100):0;
+    const discount=Math.min(subtotal,cents/100);
+    const total=+(subtotal-discount).toFixed(2);
+    return {type,value:raw,subtotal,discount,total,valid:valid&&total>0,adminRequired:subtotal>0&&discount/subtotal>0.2000001};
+  },
+  updateSaleDiscount() {
+    const d=this.readSaleDiscount();
+    const output=document.getElementById('sale-discount-summary'),error=document.getElementById('sale-discount-error'),amount=document.getElementById('pay-final-total'),btn=document.getElementById('btn-confirm-pay');
+    if(output)output.textContent=`Subtotal: ${Utils.formatMoney(d.subtotal)} · Descuento: -${Utils.formatMoney(d.discount)} · Total: ${Utils.formatMoney(d.total)}`;
+    if(amount)amount.textContent=Utils.formatMoney(d.total);
+    const message=!d.valid?'El descuento debe ser válido y el importe final mayor que cero.':d.adminRequired&&!Auth.isAdmin()?'Descuentos superiores al 20%: solicita al administrador que realice la venta.':'';
+    if(error)error.textContent=message;
+    if(btn)btn.disabled=!!message;
+    const split=document.getElementById('split-pay-area');
+    if(split&&!split.classList.contains('hidden')){
+      const first=document.getElementById('split-amount-1');
+      if(first){first.max=d.total.toFixed(2);if(Number(first.value)>=d.total)first.value=(d.total/2).toFixed(2);}
+      this.updateSplitPayment();
+    }
+    return !message;
+  },
   updateSplitPayment() {
-    const total=Store.getCartTotal(),raw=Number(document.getElementById('split-amount-1')?.value||0),a1=Number.isFinite(raw)?+raw.toFixed(2):0;
+    const total=this.readSaleDiscount().total,raw=Number(document.getElementById('split-amount-1')?.value||0),a1=Number.isFinite(raw)?+raw.toFixed(2):0;
     const a2=+(total-a1).toFixed(2),el2=document.getElementById('split-amount-2'),check=document.getElementById('split-check');
     if(el2)el2.value=Math.max(0,a2).toFixed(2);
     const m1=document.getElementById('split-method-1')?.value,m2=document.getElementById('split-method-2')?.value;
@@ -1229,18 +1275,20 @@ const Pages = {
   confirmPago() {
     const splitArea=document.getElementById('split-pay-area');
     const split=splitArea&&!splitArea.classList.contains('hidden');
-    const total=Store.getCartTotal();
+    const discount=this.readSaleDiscount();
+    if(!this.updateSaleDiscount())return Toast.show('Revisa el descuento antes de continuar','error');
+    const total=discount.total;
     if(split){
       if(!this.updateSplitPayment())return Toast.show('Revisa los métodos y montos del pago por separado','error');
       const p1={metodo:document.getElementById('split-method-1').value,monto:+Number(document.getElementById('split-amount-1').value).toFixed(2)};
       const p2={metodo:document.getElementById('split-method-2').value,monto:+Number(document.getElementById('split-amount-2').value).toFixed(2)};
-      return confirmAction(`Cobrar ${Utils.formatMoney(total)} en 2 partes: ${p1.metodo} ${Utils.formatMoney(p1.monto)} + ${p2.metodo} ${Utils.formatMoney(p2.monto)}. ¿Confirmar venta?`,async()=>Pages._confirmPagoNow([p1,p2]),{title:'Confirmar pago por separado',confirmText:'Cobrar',danger:false,key:'venta'});
+      return confirmAction(`Subtotal ${Utils.formatMoney(discount.subtotal)} · Descuento -${Utils.formatMoney(discount.discount)} · Total ${Utils.formatMoney(total)}. Cobrar en 2 partes: ${p1.metodo} ${Utils.formatMoney(p1.monto)} + ${p2.metodo} ${Utils.formatMoney(p2.monto)}. ¿Confirmar venta?`,async()=>Pages._confirmPagoNow([p1,p2],discount),{title:'Confirmar pago por separado',confirmText:'Cobrar',danger:false,key:'venta'});
     }
     const selected=document.querySelector('.pay-method.selected'),method=selected?.getAttribute('data-method')||'Efectivo';
-    confirmAction(`Cobrar ${Utils.formatMoney(total)} mediante ${method}. ¿Confirmar venta?`,async()=>Pages._confirmPagoNow(method),{title:'Confirmar venta',confirmText:'Cobrar',danger:false,key:'venta'});
+    confirmAction(`Subtotal ${Utils.formatMoney(discount.subtotal)} · Descuento -${Utils.formatMoney(discount.discount)} · Total a cobrar ${Utils.formatMoney(total)} mediante ${method}. ¿Confirmar venta?`,async()=>Pages._confirmPagoNow(method,discount),{title:'Confirmar venta',confirmText:'Cobrar',danger:false,key:'venta'});
   },
-  async _confirmPagoNow(paymentInput) {
-    const res = await Store.confirmSale(paymentInput);
+  async _confirmPagoNow(paymentInput,discount) {
+    const res = await Store.confirmSale(paymentInput,discount);
     if (!res.ok) { Toast.show(res.error, 'error'); return res; }
     SetupGuide.mark('saleDone');Modal.close();App.updateCartBadge();
     const s=res.sale;
@@ -1258,7 +1306,7 @@ const Pages = {
     return `
       <div class="page-header"><div><h1 class="page-title">🧾 ${Auth.isAdmin()?'Historial de ventas':'Mis ventas'}</h1><p class="ux-page-sub">Filtra por fecha, método o búsqueda. El monto se recalcula automáticamente con los resultados del filtro.</p></div></div>
       <div class="stat-cards ux-filter-summary" style="margin-bottom:1.25rem">
-        <div class="stat-card ux-live-total"><div class="stat-label" id="hist-total-label">💰 Total vendido en este filtro</div><div class="stat-value amber" id="hist-total">${Utils.formatMoney(total)}</div><div class="stat-sub" id="hist-range-label">${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}</div></div>
+        <div class="stat-card ux-live-total"><div class="stat-label" id="hist-total-label">💰 Total vendido en este filtro</div><div class="stat-value amber" id="hist-total">${Utils.formatMoney(total)}</div><div class="stat-sub" id="hist-discount-label">Descuentos: ${Utils.formatMoney(valid.reduce((n,s)=>n+this._saleDiscount(s),0))}</div><div class="stat-sub" id="hist-range-label">${desde===hasta?`Fecha: ${Utils.formatDate(desde)}`:`Rango: ${Utils.formatDate(desde)} → ${Utils.formatDate(hasta)}`}</div></div>
         <div class="stat-card"><div class="stat-label">🧾 Resultados</div><div class="stat-value" id="hist-count">${valid.length}</div><div class="stat-sub"><span id="hist-valid-label">${valid.length} completada(s)</span> · <span id="hist-annulled-label">${annulled.length} anulada(s)</span></div></div>
       </div>
       <div class="toolbar ux-filter-grid">
@@ -1269,7 +1317,7 @@ const Pages = {
         <label class="ux-date-filter">Hasta<input type="date" id="hist-to" class="filter-select" value="${hasta}" onchange="Pages.filterHistorial(true)" /></label>
       </div>
       <div class="ux-filter-actions"><span>⚡ El monto superior siempre corresponde a lo que estás viendo con estos filtros.</span><button class="btn btn-sm btn-secondary" onclick="Pages.resetHistFilters()">↺ Limpiar filtros</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Empleado</th><th>Productos</th><th>Total</th><th>Método</th><th>Estado</th><th></th></tr></thead><tbody id="hist-tbody">${this._histRows(sales)}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Empleado</th><th>Productos</th><th>Subtotal</th><th>Descuento</th><th>Total cobrado</th><th>Método</th><th>Estado</th><th></th></tr></thead><tbody id="hist-tbody">${this._histRows(sales)}</tbody></table></div>
     `;
   },
   _histRows(sales) {
@@ -1277,7 +1325,7 @@ const Pages = {
     return sales.map(s=>{
       const emp=Store.getUser(s.empleadoId),items=Array.isArray(s.items)?s.items:[];
       const prodSummary=items.map(i=>`${Store.getProduct(i.productoId)?.nombre||i?.nombre||'?'} ×${Number(i?.cantidad||0)}`).join(', ');
-      return `<tr><td data-label="Fecha">${Utils.formatDate(s.fecha)}</td><td data-label="Hora">${Utils.formatTime(s.hora)}</td><td data-label="Empleado">${Utils.escapeHtml(emp?`${emp.nombres} ${emp.apellidos}`:(s.empleadoNombre||'—'))}</td><td data-label="Productos" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td><td data-label="Total" style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td><td data-label="Método">${Utils.escapeHtml(Store.salePaymentLabel(s))}</td><td data-label="Estado">${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td><td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">👁️ Ver</button> ${Auth.isAdmin()&&s.estado!=='Anulada'?`<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>`:''}</td></tr>`;
+      return `<tr><td data-label="Fecha">${Utils.formatDate(s.fecha)}</td><td data-label="Hora">${Utils.formatTime(s.hora)}</td><td data-label="Empleado">${Utils.escapeHtml(emp?`${emp.nombres} ${emp.apellidos}`:(s.empleadoNombre||'—'))}</td><td data-label="Productos" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${Utils.escapeHtml(prodSummary)}">${Utils.escapeHtml(prodSummary)}</td><td data-label="Subtotal">${Utils.formatMoney(this._saleSubtotal(s))}</td><td data-label="Descuento" class="ux-discount-cell">${this._saleDiscount(s)>0?`−${Utils.formatMoney(this._saleDiscount(s))}`:'—'}</td><td data-label="Total cobrado" style="color:var(--amber);font-weight:600">${Utils.formatMoney(s.total)}</td><td data-label="Método">${Utils.escapeHtml(Store.salePaymentLabel(s))}</td><td data-label="Estado">${s.estado==='Anulada'?'<span class="badge badge-danger">Anulada</span>':'<span class="badge badge-success">Completada</span>'}</td><td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.showSaleDetail('${s.id}')">👁️ Ver</button> ${Auth.isAdmin()&&s.estado!=='Anulada'?`<button class="btn btn-sm btn-danger" onclick="Pages.anularVenta('${s.id}')">Anular</button>`:''}</td></tr>`;
     }).join('');
   },
   _applyHistorialFilters({syncing=false}={}) {
@@ -1309,6 +1357,8 @@ const Pages = {
     // "Actualizando…" por un error visual secundario.
     const totalEl=document.getElementById('hist-total');
     const rangeEl=document.getElementById('hist-range-label');
+    const discountEl=document.getElementById('hist-discount-label');
+    if(discountEl)discountEl.textContent=`Descuentos: ${Utils.formatMoney(valid.reduce((n,s)=>n+this._saleDiscount(s),0))}`;
     const countEl=document.getElementById('hist-count');
     const validEl=document.getElementById('hist-valid-label');
     const annulledEl=document.getElementById('hist-annulled-label');
@@ -1351,11 +1401,13 @@ const Pages = {
         <div class="detail-row"><span class="dr-label">Fecha</span><span class="dr-value">${Utils.formatDate(s.fecha)} ${Utils.formatTime(s.hora)}</span></div>
         <div class="detail-row"><span class="dr-label">Empleado</span><span class="dr-value">${Utils.escapeHtml(emp?`${emp.nombres} ${emp.apellidos}`:(s.empleadoNombre||'—'))}</span></div>
         <div class="detail-row"><span class="dr-label">Jornada</span><span class="dr-value">${Utils.escapeHtml((()=>{const j=Store.state.jornadas.find(x=>x.id===(s.jornadaId||s.cajaId));return j?.numero||Store.journeyNumber(s.jornadaId||s.cajaId)||'—'})())}</span></div>
+        <div class="detail-row"><span class="dr-label">Subtotal</span><span class="dr-value">${Utils.formatMoney(s.subtotal??s.total)}</span></div>
+        <div class="detail-row"><span class="dr-label">Descuento</span><span class="dr-value">-${Utils.formatMoney(s.descuentoMonto||0)}${s.descuentoTipo==='percent'?` (${Number(s.descuentoValor||0)}%)`:''}</span></div>
         <div class="detail-row"><span class="dr-label">Pago</span><span class="dr-value">${Utils.escapeHtml(Store.salePaymentLabel(s))}</span></div>
         ${pagos.length>1?`<div class="ux-payment-detail">${pagos.map(p=>`<span>${Utils.escapeHtml(p.metodo)} <strong>${Utils.formatMoney(p.monto)}</strong></span>`).join('')}</div>`:''}
         <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem">📦 Productos</h4>
         <div class="table-wrap"><table><thead><tr><th>Producto</th><th>Cant.</th><th>P. unit.</th><th>Subtotal</th></tr></thead><tbody>${(Array.isArray(s.items)?s.items:[]).map(i=>`<tr><td data-label="Producto">${Utils.escapeHtml(Store.getProduct(i.productoId)?.nombre||i?.nombre||'—')}</td><td>${Number(i?.cantidad||0)}</td><td>${Utils.formatMoney(i?.precioUnitario)}</td><td style="color:var(--amber)">${Utils.formatMoney(i?.subtotal)}</td></tr>`).join('')}</tbody></table></div>
-        <div style="text-align:right;margin-top:1rem;font-family:var(--font-serif);font-size:1.3rem;color:var(--amber)">Total: ${Utils.formatMoney(s.total)}</div>
+        <div style="text-align:right;margin-top:1rem;font-family:var(--font-serif);font-size:1.3rem;color:var(--amber)">Total cobrado: ${Utils.formatMoney(s.total)}</div>
       </div><div class="modal-footer"><button class="btn btn-secondary" onclick="Modal.close()">Cerrar</button></div>`);
   },
 
@@ -1423,13 +1475,14 @@ const Pages = {
         <td data-label="Apertura">${Utils.formatDate(j.fechaApertura||j.fecha)} ${Utils.formatTime(j.horaApertura||j.hora)}</td>
         <td data-label="Responsable">${Utils.escapeHtml(j.usuarioNombre||Store.getUser(j.usuarioId)?.nombres||'—')}</td>
         <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(st.totalSales)}</strong></td>
+        <td data-label="Descuentos">${Utils.formatMoney(st.totalDiscounts)}</td>
         <td data-label="Gastos">${Utils.formatMoney(st.totalExpenses)}</td>
         <td data-label="Duración">${this._durationLabel(st.duration)}</td>
         <td data-label="Estado">${status}<small class="ux-cash-closed-at">${cierre}</small></td>
         <td data-label="Diferencia">${diff}</td>
         <td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.viewJornada('${j.id}')">👁️ Ver</button></td>
       </tr>`;
-    }).join('')||'<tr><td colspan="9">Todavía no hay jornadas registradas</td></tr>';
+    }).join('')||'<tr><td colspan="10">Todavía no hay jornadas registradas</td></tr>';
 
     return `<div class="page-header ux-page-head">
       <div><h1 class="page-title">🌙 Jornada y Caja</h1><p class="ux-page-sub">Una jornada puede empezar hoy y terminar mañana. No se cierra automáticamente a medianoche.</p></div>
@@ -1450,6 +1503,7 @@ const Pages = {
     ${jornada?`
       <div class="stat-cards ux-payment-summary">
         <div class="stat-card"><div class="stat-label">💰 Ventas de la jornada</div><div class="stat-value amber">${Utils.formatMoney(stats.totalSales)}</div><div class="stat-sub">${stats.sales.length} venta(s) válida(s)</div></div>
+        <div class="stat-card"><div class="stat-label">🏷️ Descuentos de la jornada</div><div class="stat-value">${Utils.formatMoney(stats.totalDiscounts)}</div><div class="stat-sub">No se consideran gastos ni dinero cobrado</div></div>
         <div class="stat-card"><div class="stat-label">💵 Efectivo de ventas</div><div class="stat-value">${Utils.formatMoney(stats.pay.Efectivo)}</div><div class="stat-sub">No incluye monto inicial</div></div>
         <div class="stat-card"><div class="stat-label">📱 Yape / Plin</div><div class="stat-value">${Utils.formatMoney(stats.pay.Yape+stats.pay.Plin)}</div><div class="stat-sub">Yape ${Utils.formatMoney(stats.pay.Yape)} · Plin ${Utils.formatMoney(stats.pay.Plin)}</div></div>
         <div class="stat-card"><div class="stat-label">💳 Tarjeta</div><div class="stat-value">${Utils.formatMoney(stats.pay.Tarjeta)}</div><div class="stat-sub">Pagos con tarjeta</div></div>
@@ -1494,7 +1548,7 @@ const Pages = {
 
     <div class="card ux-cash-history-card">
       <div class="ux-section-head ux-cash-history-head"><div><h3>📚 Jornadas recientes</h3><p>Cada fila representa un turno completo del bar.</p></div><span class="ux-history-count">${history.length} registro${history.length===1?'':'s'}</span></div>
-      <div class="table-wrap ux-cash-history"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Responsable</th><th>Ventas</th><th>Gastos</th><th>Duración</th><th>Estado / cierre</th><th>Diferencia</th><th></th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div>
+      <div class="table-wrap ux-cash-history"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Responsable</th><th>Ventas netas</th><th>Descuentos</th><th>Gastos</th><th>Duración</th><th>Estado / cierre</th><th>Diferencia</th><th></th></tr></thead><tbody id="cash-tbody">${historyRows}</tbody></table></div>
     </div>`;
   },
 
@@ -1564,11 +1618,11 @@ const Pages = {
         <input type="search" id="journey-search" class="search-input" placeholder="🔎 Buscar jornada o responsable..." oninput="Pages.filterJornadas()">
         <select id="journey-status" class="filter-select" onchange="Pages.filterJornadas()"><option value="">Todos los estados</option><option value="Abierta">Abiertas</option><option value="Cerrada">Cerradas</option></select>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Cierre</th><th>Responsable</th><th>Duración</th><th>Ventas</th><th>Gastos</th><th>Estado</th><th></th></tr></thead><tbody id="journey-tbody">${this._journeyRows(list)}</tbody></table></div>`;
+      <div class="table-wrap"><table><thead><tr><th>Jornada</th><th>Apertura</th><th>Cierre</th><th>Responsable</th><th>Duración</th><th>Ventas netas</th><th>Descuentos</th><th>Gastos</th><th>Estado</th><th></th></tr></thead><tbody id="journey-tbody">${this._journeyRows(list)}</tbody></table></div>`;
   },
 
   _journeyRows(list){
-    if(!list.length)return `<tr><td colspan="9">${Components.empty('🌙','No hay jornadas para mostrar')}</td></tr>`;
+    if(!list.length)return `<tr><td colspan="10">${Components.empty('🌙','No hay jornadas para mostrar')}</td></tr>`;
     return list.map(j=>{
       const st=this._journeyStats(j);
       return `<tr>
@@ -1578,6 +1632,7 @@ const Pages = {
         <td data-label="Responsable">${Utils.escapeHtml(j.usuarioNombre||Store.getUser(j.usuarioId)?.nombres||'—')}</td>
         <td data-label="Duración">${this._durationLabel(st.duration)}</td>
         <td data-label="Ventas"><strong class="ux-money-cell">${Utils.formatMoney(st.totalSales)}</strong></td>
+        <td data-label="Descuentos">${Utils.formatMoney(st.totalDiscounts)}</td>
         <td data-label="Gastos">${Utils.formatMoney(st.totalExpenses)}</td>
         <td data-label="Estado">${j.estado==='Abierta'?'<span class="badge badge-success">● Abierta</span>':'<span class="badge badge-neutral">Cerrada</span>'}</td>
         <td data-label="Acciones"><button class="btn btn-sm btn-secondary" onclick="Pages.viewJornada('${j.id}')">👁️ Ver detalle</button></td>
@@ -1616,7 +1671,9 @@ const Pages = {
         <div class="detail-row"><span class="dr-label">Duración</span><span class="dr-value">${this._durationLabel(st.duration)}</span></div>
         <div class="detail-row"><span class="dr-label">Responsable / empleados</span><span class="dr-value">${Utils.escapeHtml(names.join(', ')||'—')}</span></div>
         <hr style="border-color:var(--border)">
-        <div class="detail-row"><span class="dr-label">Ventas</span><span class="dr-value">${Utils.formatMoney(st.totalSales)}</span></div>
+        <div class="detail-row"><span class="dr-label">Subtotal antes de descuentos (ventas cargadas)</span><span class="dr-value">${Utils.formatMoney(st.totalSubtotal)}</span></div>
+        <div class="detail-row"><span class="dr-label">Descuentos aplicados (ventas cargadas)</span><span class="dr-value">−${Utils.formatMoney(st.totalDiscounts)}</span></div>
+        <div class="detail-row"><span class="dr-label">Ventas netas / cobradas</span><span class="dr-value">${Utils.formatMoney(st.totalSales)}</span></div>
         <div class="detail-row"><span class="dr-label">Efectivo</span><span class="dr-value">${Utils.formatMoney(st.pay.Efectivo)}</span></div>
         <div class="detail-row"><span class="dr-label">Yape / Plin</span><span class="dr-value">${Utils.formatMoney(st.pay.Yape+st.pay.Plin)}</span></div>
         <div class="detail-row"><span class="dr-label">Tarjeta</span><span class="dr-value">${Utils.formatMoney(st.pay.Tarjeta)}</span></div>
@@ -1779,16 +1836,17 @@ const Pages = {
       ['Solo se exportan ventas y gastos no anulados del periodo seleccionado.'],
       ['Efectivo refleja cobros por ventas, no ingresos/retiros de caja.'],
       ['Saldo operativo no equivale a utilidad neta.'],
-      ['Las ventas con pagos divididos aparecen por método en la hoja Métodos de pago.']
+      ['Las ventas con pagos divididos aparecen por método en la hoja Métodos de pago.'],
+      ['Descuentos concedidos (S/)',money(sales.reduce((n,s)=>n+Number(s.descuentoMonto||0),0))]
     ];
     const sws=makeSheet('Resumen',summary,[46,24,16,23],[1],[],{summary:true,headerRow:4});
     sws['!merges']=[{s:{r:0,c:0},e:{r:0,c:3}},{s:{r:19,c:0},e:{r:19,c:3}}];
     if(sws.A1)sws.A1.s={font:{bold:true,sz:20,color:{rgb:palette.white}},fill:{fgColor:{rgb:palette.dark}},alignment:{vertical:'center'}};
     for(const r of [15,19]){const ref='A'+(r+1);if(sws[ref])sws[ref].s={font:{bold:true,color:{rgb:palette.white}},fill:{fgColor:{rgb:palette.dark}}};}
     for(let r=5;r<=17;r++){const cell=sws['B'+(r+1)];if(cell&&cell.t==='n'&&r!==12&&r!==13)cell.z='"S/ "#,##0.00';}
-    const saleRows=[['Fecha','Hora','N° venta','Empleado','Jornada','Estado','Método de pago','Total (S/)'],...sales.map(s=>[date(s.fecha),safe(s.hora),safe(s.numero||s.id),safe(s.empleadoNombre),safe(s.jornadaId||s.cajaId),safe(s.estado),safe(Store.salePaymentLabel(s)),money(s.total)])];
+    const saleRows=[['Fecha','Hora','N° venta','Empleado','Jornada','Estado','Método de pago','Subtotal (S/)','Descuento (S/)','Total (S/)'],...sales.map(s=>[date(s.fecha),safe(s.hora),safe(s.numero||s.id),safe(s.empleadoNombre),safe(s.jornadaId||s.cajaId),safe(s.estado),safe(Store.salePaymentLabel(s)),money(s.subtotal??s.total),money(s.descuentoMonto||0),money(s.total)])];
     const expenseRows=[['Fecha','Hora','Concepto','Categoría','Origen','Método de pago','Jornada','Importe (S/)'],...expenses.map(e=>[date(e.fecha),safe(e.hora),safe(e.concepto),safe(e.categoria),safe(e.origen),safe(e.metodoPago),safe(e.jornadaId||e.cajaId),money(e.monto)])];
-    makeSheet('Ventas',saleRows,[15,12,23,27,26,17,25,19],[7]);
+    makeSheet('Ventas',saleRows,[15,12,23,27,26,17,25,19,21,19],[7,8,9]);
     makeSheet('Gastos',expenseRows,[15,12,42,24,22,22,26,19],[7]);
     makeSheet('Métodos de pago',[['Fecha','N° venta','Empleado','Método','Importe (S/)'],...payments],[15,25,28,20,19],[4]);
     const byProduct=[...prodAgg.values()].sort((a,b)=>b.amount-a.amount);

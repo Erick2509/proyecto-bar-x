@@ -187,7 +187,7 @@ service cloud.firestore {
     match /sales/{id} {
       allow read: if admin() || (active() && resource.data.empleadoId == request.auth.uid);
       allow create: if (!maintenance() || restorationWrite()) && (active()
-        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','jornadaId','items','total','costoTotal','metodoPago','pagos','estado','createdAt'])
+        && request.resource.data.keys().hasOnly(['fecha','hora','numero','empleadoId','empleadoNombre','cajaId','jornadaId','items','subtotal','descuentoTipo','descuentoValor','descuentoMonto','total','costoTotal','metodoPago','pagos','estado','createdAt'])
         && request.resource.data.empleadoId == request.auth.uid
         && request.resource.data.numero is string
         && request.resource.data.numero.matches('^V-[A-Z0-9]{6}$')
@@ -209,6 +209,14 @@ service cloud.firestore {
         && request.resource.data.estado == 'Completada'
         && validSalePayments(request.resource.data)
         && strictPositive(request.resource.data.total)
+        && strictPositive(request.resource.data.subtotal)
+        && request.resource.data.descuentoTipo in ['percent','amount']
+        && positiveNumber(request.resource.data.descuentoValor)
+        && positiveNumber(request.resource.data.descuentoMonto)
+        && request.resource.data.descuentoMonto < request.resource.data.subtotal
+        && request.resource.data.total + request.resource.data.descuentoMonto >= request.resource.data.subtotal - 0.011
+        && request.resource.data.total + request.resource.data.descuentoMonto <= request.resource.data.subtotal + 0.011
+        && (request.resource.data.descuentoMonto <= request.resource.data.subtotal * 0.2 || admin())
         && positiveNumber(request.resource.data.costoTotal)
         && request.resource.data.items is list
         && request.resource.data.items.size() > 0

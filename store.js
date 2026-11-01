@@ -594,7 +594,7 @@ const Store = (() => {
       trackUsage('reads',1);trackUsage('writes',1);validatedCashId=caja.id;return{ok:true};
     }catch(e){return{ok:false,error:e.message||'No se pudo validar la caja activa'}}
   }
-  async function confirmSale(paymentInput){
+  async function confirmSale(paymentInput,discountInput={}){
     const u=state.currentUser;
     if(!u||!isActive(u))return{ok:false,error:'Sesión no válida'};
     if(!state.cart.length)return{ok:false,error:'Carrito vacío'};
@@ -643,6 +643,14 @@ const Store = (() => {
           tx.set(db.collection('movements').doc(),{...t,jornadaId:jornada.id,cajaId:caja.id,productoId:s.id,productoNombre:String(p.nombre||''),tipo:'Venta',cantidad:qty,stockAnterior:stock,stockNuevo:stock-qty,usuarioId:u.id,motivo:`Venta ${saleRef.id}`});
         }
         total=+total.toFixed(2);costo=+costo.toFixed(2);
+        const subtotal=total;
+        const descuentoTipo=discountInput?.type==='percent'?'percent':'amount';
+        const descuentoValor=Number(discountInput?.value||0);
+        if(!Number.isFinite(descuentoValor)||descuentoValor<0||(descuentoTipo==='percent'&&descuentoValor>100))throw Error('Descuento inválido');
+        const descuentoMonto=+(descuentoTipo==='percent'?subtotal*descuentoValor/100:descuentoValor).toFixed(2);
+        if(descuentoMonto>subtotal)throw Error('El descuento supera el subtotal');
+        if(subtotal>0&&descuentoMonto/subtotal>0.2000001&&u.role!=='admin')throw Error('Descuentos superiores al 20% requieren administrador');
+        total=+(subtotal-descuentoMonto).toFixed(2);
         if(!Number.isFinite(total)||total<=0)throw Error('El total de la venta debe ser mayor a S/ 0.00');
         if(split){
           const paymentTotal=+requestedPayments.reduce((a,p)=>a+Number(p.monto||0),0).toFixed(2);
@@ -654,7 +662,7 @@ const Store = (() => {
           savedMethod=requestedPayments[0].metodo;
         }
         const t=limaParts();
-        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,jornadaId:jornada.id,items,total,costoTotal:costo,metodoPago:savedMethod,pagos:savedPayments,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+        tx.set(saleRef,{...t,numero:`V-${saleRef.id.slice(0,6).toUpperCase()}`,empleadoId:u.id,empleadoNombre:`${u.nombres} ${u.apellidos}`.trim(),cajaId:caja.id,jornadaId:jornada.id,items,subtotal,descuentoTipo,descuentoValor,descuentoMonto,total,costoTotal:costo,metodoPago:savedMethod,pagos:savedPayments,estado:'Completada',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
       });
       trackUsage('reads',state.cart.length);trackUsage('writes',1+state.cart.length*2);
       delete loadedAt[`cashSales:${caja.id}`];delete loadedAt[`journeySalesAdmin:${jornada.id}`];
